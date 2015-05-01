@@ -1,0 +1,357 @@
+#!/bin/sh -e
+
+main() {
+	if [ -z "$REDO_DB_DIR" ]; then
+		export REDO_DB_DIR=`readlink -f ./.redo`
+		mkdir -p "$REDO_DB_DIR"
+	fi
+
+	if [ -z "$REDO" ]; then
+		export REDO=`readlink -f $0`
+	fi
+
+	if [ ! -f "$REDO_DB_DIR/redo-ifchange" ]; then
+		ln -s "$REDO" "$REDO_DB_DIR/redo-ifchange"
+		ln -s "$REDO" "$REDO_DB_DIR/redo-ifcreate"
+		ln -s "$REDO" "$REDO_DB_DIR/redo-always"
+		ln -s "$REDO" "$REDO_DB_DIR/redo-run"
+	fi
+
+	local name=`basename $0`
+
+	case $name in
+		"redo")
+			redo $*
+			;;
+		"redo-ifchange")
+			redo_ifchange $*
+			;;
+		"redo-ifcreate")
+			redo_ifcreate $*
+			;;
+		"redo-always")
+			redo_always $*
+			;;
+		"redo-run")
+			redo_run $*
+			;;
+		*)
+			log "Invalid command '$name'"
+			exit 1
+			;;
+	esac
+}
+
+redo() {
+	db_reset_uptodate
+	redo_ifchange all
+}
+
+redo_ifchange() {
+	local i
+	local j
+
+	local old_cmd="$cmd_name"
+	cmd_name="redo-ifchange"
+	for i in "$@"
+	do
+		#TODO: Normalize path
+		db_add_prereq "$REDO_PARENT" "$i"
+
+		db_get_type "$i"
+		local file_type="$db_result"
+		local file_type_name=
+		if [ "$file_type" = "s" ]; then
+			file_type_name="source"
+		else
+			file_type_name="target"
+		fi
+
+		log "Checking $file_type_name file '$i'"
+
+		if db_is_uptodate "$i"; then
+			log "'$i' was checked previously"
+			continue
+		fi
+
+		if [ "$file_type" = "s" ]; then
+			if db_update_own_checksum "$i"; then
+				log "'$i' was updated"
+			else
+				log "'$i' is unchanged"
+			fi
+			db_mark_as_uptodate "$i"
+
+			continue
+		fi
+
+		# Try to build a target
+		local must_build="n"
+
+		# Check if prereqs are up-to-date
+		db_get_prereqs "$i"
+		local prereqs="$db_result"
+		if [ ! -z "$prereqs" ]; then
+			for j in $prereqs
+			do
+				if db_outdated "$j"; then
+					with_parent "$i" redo_ifchange "$j"
+
+					if db_prereq_rebuilt "$i" "$j"; then
+						log "'$j' was updated"
+						must_build="y"
+					fi
+				fi
+			done
+		fi
+
+		# Check all "if-create" prereqs
+		db_get_ifcreate_prereqs "$i"
+		local ifcreate_prereqs="$db_result"
+		if [ ! -z "$ifcreate_prereqs" ]; then
+			for j in "$ifcreate_prereqs"
+			do
+				if [ -f "$j" ]; then
+					log "'$j' was created"
+					must_build="y"
+					break
+				fi
+			done
+		fi
+
+		# If file exists and it is not required to build, bail out
+		if [ -f "$i" ] && [ "$must_build" = "n" ]; then
+			db_mark_as_uptodate "$i"
+			log "'$i' is up-to-date"
+			continue
+		fi
+
+		# Search and execute build script
+		search_build_script "$i"
+		local script="$build_script"
+
+		if [ ! -f "$script" ]; then
+			log "No build script for '$i'"
+			exit 1
+		fi
+
+		if run_build_script "$i" "$script"; then
+			db_update_prereqs_checksums "$i"
+			db_update_own_checksum "$i"
+			db_mark_as_uptodate "$i"
+			log "Done with '$i'"
+		else
+			log "'$script' failed"
+			exit 1
+		fi
+	done
+
+	cmd_name="$old_cmd"
+}
+
+redo_ifcreate() {
+	local i
+	local old_cmd="$old_cmd"
+	cmd_name="redo-ifcreate"
+
+	for i in "$@"
+	do
+		db_add_ifcreate_prereq "$REDO_PARENT" "$i"
+	done
+
+	cmd_name="$old_cmd"
+}
+
+redo_always() {
+	local i
+	local old_cmd="$old_cmd"
+	cmd_name="redo-always"
+
+	for i in "$@"
+	do
+		log "Building '$i'"
+		search_build_script "$i"
+		local script="$build_script"
+
+		if [ -z "$script" ]; then
+			log "No build script for '$i'"
+			exit 1
+		fi
+
+		if run_build_script "$i" "$script"; then
+			log "Done with '$i'"
+		else
+			log "'$script' failed"
+			exit 1
+		fi
+	done
+
+	cmd_name="$old_cmd"
+}
+
+redo_run() {
+	REDO_SCRIPT=$1
+	shift
+	REDO_PARENT=$1
+	export REDO_PARENT
+	export PATH="$REDO_DB_DIR:$PATH"
+	sh -ex $REDO_SCRIPT $*
+}
+
+with_parent() {
+	local old_parent="$REDO_PARENT"
+	REDO_PARENT="$1"
+	local cmd="$2"
+	shift 2
+	"$cmd" $*
+	REDO_PARENT="$old_parent"
+}
+
+db_get_type() {
+	local key="$REDO_DB_DIR/$1/.redo/type"
+	if [ -f "$key" ]; then
+		db_result=`cat "$key"`
+	else
+		if [ -f "$1" ]; then
+			db_result="s"
+		else
+			db_result="t"
+		fi
+		db_write "$key" "$db_result"
+	fi
+}
+
+db_add_prereq() {
+	if [ -z "$1" ]; then
+		return 0
+	fi
+
+	local key="$REDO_DB_DIR/$1/.redo/prereqs/$2"
+	db_affirm_key "$key"
+	rm -rf "$REDO_DB_DIR/$1/.redo/ifcreate/$2"
+}
+
+db_get_prereqs() {
+	local key="$REDO_DB_DIR/$1/.redo/prereqs"
+	if [ ! -d "$key" ]; then
+		db_result=
+	else
+		db_result=`cd $key;find -type f`
+	fi
+}
+
+db_add_ifcreate_prereq() {
+	#TODO: switch type warning
+	local key="$REDO_DB_DIR/$1/.redo/ifcreate/$2"
+	db_affirm_key "$key"
+	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs/$2"
+}
+
+db_get_ifcreate_prereqs() {
+	local key="$REDO_DB_DIR/$1/.redo/ifcreate"
+	if [ ! -d "$key" ]; then
+		db_result=
+	else
+		db_result=`cd $key;find -type f`
+	fi
+}
+
+db_update_own_checksum() {
+	local checksum=`sha1sum "$1" | cut -d' ' -f1`
+	local key="$REDO_DB_DIR/$1/.redo/checksum"
+	db_affirm_key "$key"
+	local old_checksum=`cat "$key"`
+	db_write "$key" "$checksum"
+	[ "$old_checksum" != "$checksum" ]
+}
+
+db_update_prereqs_checksums() {
+	local i
+	db_get_prereqs "$1"
+	local prereqs="$db_result"
+	if [ ! -z "$prereqs" ]; then
+		for i in $prereqs
+		do
+			local checksum=`cat "$REDO_DB_DIR/$i/.redo/checksum"`
+			db_write "$REDO_DB_DIR/$1/.redo/prereqs_checksums/$i" "$checksum"
+		done
+	fi
+}
+
+db_reset_uptodate() {
+	local files=`find .redo -path '*/.redo/uptodate'`
+	if [ ! -z "$files" ]; then
+		rm $files
+	fi
+}
+
+db_mark_as_uptodate() {
+	db_affirm_key "$REDO_DB_DIR/$1/.redo/uptodate"
+}
+
+db_is_uptodate() {
+	[ -f "$REDO_DB_DIR/$1/.redo/uptodate" ]
+}
+
+db_outdated() {
+	[ ! -f "$REDO_DB_DIR/$1/.redo/uptodate" ]
+}
+
+db_prereq_rebuilt() {
+	local new_hash=`cat "$REDO_DB_DIR/$2/.redo/checksum"`
+	local old_hash=
+	local key="$REDO_DB_DIR/$1/.redo/prereqs_checksums/$2"
+	if [ -f "$key" ]; then
+		old_hash=`cat "$key"`
+	fi
+
+	[ "$new_hash" != "$old_hash" ]
+}
+
+db_write() {
+	local key_dir=`dirname "$1"`
+	mkdir -p "$key_dir"
+	echo "$2" > "$1"
+}
+
+db_affirm_key() {
+	local key_dir=`dirname "$1"`
+	mkdir -p "$key_dir"
+	if [ ! -f "$1" ]; then
+		touch "$1"
+	fi
+}
+
+search_build_script() {
+	build_script="${1}.do"
+	if [ -f "$build_script" ]; then
+		return 0
+	fi
+
+	with_parent "$1" redo_ifcreate "$build_script"
+}
+
+run_build_script() {
+	log "Building '$1' using '$2'"
+	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs/*"
+	db_add_prereq "$1" "$2"
+	db_update_own_checksum "$2"
+	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
+	local script_path=`readlink -f "$2"`
+	local target_basename=`basename "$1"`
+	$REDO_DB_DIR/redo-run \
+		"$script_path" "$1" "$target_basename" "$temp_file" > "$temp_file"
+	if [ $? -eq 0 ]; then
+		rm -f "$1"
+		mv "$temp_file" "$1"
+		return 0
+	else
+		return 1
+	fi
+}
+
+log() {
+	echo "$cmd_name($REDO_PARENT): $*" >&2
+}
+
+main $*
