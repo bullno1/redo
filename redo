@@ -270,6 +270,20 @@ redo_clean() {
 	done
 }
 
+redo_activate() {
+	local old_path="$PATH"
+	local new_path="`dirname $REDO`:$PATH"
+	activate_script=`cat << SCRIPT
+PATH="$new_path"
+
+deactivate_redo() {
+	PATH="$old_path"
+	unset -f deactivate_redo
+}
+SCRIPT`
+	echo "$activate_script"
+}
+
 with_parent() {
 	local old_parent="$REDO_PARENT"
 	REDO_PARENT="$1"
