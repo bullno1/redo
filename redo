@@ -9,6 +9,7 @@ main() {
 		mkdir -p "$REDO_BIN_DIR"
 		export REDO_DB_DIR="$REDO_META_DIR/db"
 		mkdir -p "$REDO_DB_DIR"
+		export REDO_PATH="$REDO_BIN_DIR:$PATH"
 	fi
 
 	register_cmds ifchange ifcreate always graph run
@@ -211,8 +212,8 @@ redo_run() {
 	shift
 	REDO_PARENT=$1
 	export REDO_PARENT
-	export PATH="$REDO_BIN_DIR:$PATH"
-	export REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
+	export PATH="$REDO_PATH"
+	export REDO_LOG_PREFIX="$REDO_LOG_PREFIX"
 	export PS4="$REDO_LOG_PREFIX> "
 	sh -ex $REDO_SCRIPT $*
 }
