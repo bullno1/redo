@@ -10,9 +10,8 @@ main() {
 		export REDO_DB_DIR="$REDO_META_DIR/db"
 		mkdir -p "$REDO_DB_DIR"
 		export REDO_PATH="$REDO_BIN_DIR:$PATH"
+		register_cmds ifchange ifcreate always graph run log
 	fi
-
-	register_cmds ifchange ifcreate always graph run
 
 	local name=`basename $0`
 
@@ -24,7 +23,7 @@ main() {
 			try_dispatch_cmd "${name#redo-}" $*
 			;;
 		*)
-			log "redo: invalid command '$name'"
+			redo_log "redo: invalid command '$name'"
 			exit 1
 			;;
 	esac
@@ -54,92 +53,101 @@ redo_ifchange() {
 		db_get_type "$i"
 		local file_type="$db_result"
 		local file_type_name=
-		if [ "$file_type" = "s" ]; then
-			file_type_name="source"
-		else
-			file_type_name="target"
-		fi
+		case $file_type in
+			s)
+				file_type_name="source"
+				;;
+			t)
+				file_type_name="target"
+				;;
+			a)
+				file_type_name="live target"
+				;;
+		esac
 
-		log "Checking $file_type_name file '$i'"
+		redo_log "Checking $file_type_name file '$i'"
 
 		if db_is_uptodate "$i"; then
-			log "'$i' was checked previously"
+			redo_log "'$i' was checked previously"
 			continue
 		fi
 
+		# A source file only need to have its hash updated
 		if [ "$file_type" = "s" ]; then
 			if db_update_own_checksum "$i"; then
-				log "'$i' was updated"
+				redo_log "'$i' was updated"
 			else
-				log "'$i' is unchanged"
+				redo_log "'$i' is unchanged"
 			fi
 			db_mark_as_uptodate "$i"
 
 			continue
 		fi
 
-		# Try to build a target
-		local must_build="n"
+		# A regular target file may not need to be rebuilt
+		if [ "$file_type" = "t" ]; then
+			local must_build="n"
 
-		# Check if prereqs are up-to-date
-		db_get_prereqs "$i"
-		local prereqs="$db_result"
-		if [ ! -z "$prereqs" ]; then
-			for j in $prereqs
-			do
-				log "Checking prereqs '$j' of '$i'"
+			# Check if prereqs are up-to-date
+			db_get_prereqs "$i"
+			local prereqs="$db_result"
+			if [ ! -z "$prereqs" ]; then
+				for j in $prereqs
+				do
+					redo_log "Checking prereqs '$j' of '$i'"
 
-				# Update prereq if needed
-				if db_outdated "$j"; then
-					with_parent "$i" redo_ifchange "$j"
-				fi
+					# Update prereq if needed
+					if db_outdated "$j"; then
+						with_parent "$i" redo_ifchange "$j"
+					fi
 
-				# Even if prereq is up-to-date, we may still depend on an old
-				# version of it, so check if it was rebuilt since last time
-				if db_prereq_rebuilt "$i" "$j"; then
-					log "'$j' was updated"
-					must_build="y"
-				fi
-			done
+					# Even if prereq is up-to-date, we may still depend on an old
+					# version of it, so check if it was rebuilt since last time
+					if db_prereq_rebuilt "$i" "$j"; then
+						redo_log "'$j' was updated"
+						must_build="y"
+					fi
+				done
+			fi
+
+			# Check all "if-create" prereqs
+			db_get_ifcreate_prereqs "$i"
+			local ifcreate_prereqs="$db_result"
+			if [ ! -z "$ifcreate_prereqs" ]; then
+				for j in "$ifcreate_prereqs"
+				do
+					if [ -f "$j" ]; then
+						redo_log "'$j' was created"
+						must_build="y"
+						break
+					fi
+				done
+			fi
+
+			# If file exists and it is not required to build, bail out
+			if [ -f "$i" ] && [ "$must_build" = "n" ]; then
+				db_mark_as_uptodate "$i"
+				redo_log "'$i' is up-to-date"
+				continue
+			fi
 		fi
 
-		# Check all "if-create" prereqs
-		db_get_ifcreate_prereqs "$i"
-		local ifcreate_prereqs="$db_result"
-		if [ ! -z "$ifcreate_prereqs" ]; then
-			for j in "$ifcreate_prereqs"
-			do
-				if [ -f "$j" ]; then
-					log "'$j' was created"
-					must_build="y"
-					break
-				fi
-			done
-		fi
-
-		# If file exists and it is not required to build, bail out
-		if [ -f "$i" ] && [ "$must_build" = "n" ]; then
-			db_mark_as_uptodate "$i"
-			log "'$i' is up-to-date"
-			continue
-		fi
-
-		# Search and execute build script
-		search_build_script "$i"
+		# Find and execute build script
+		find_build_script "$i"
 		local script="$build_script"
 
 		if [ ! -f "$script" ]; then
-			log "No build script for '$i'"
+			redo_log "No build script for '$i'"
 			exit 1
 		fi
 
 		if run_build_script "$i" "$script"; then
 			db_update_prereqs_checksums "$i"
-			db_update_own_checksum "$i"
+			db_update_own_checksum "$i" || true
 			db_mark_as_uptodate "$i"
-			log "Done with '$i'"
+			redo_log "Done with '$i'"
 		else
-			log "'$script' failed"
+			redo_log "'$script' failed"
 			exit 1
 		fi
 	done
@@ -154,25 +162,7 @@ redo_ifcreate() {
 }
 
 redo_always() {
-	local i
-	for i in "$@"
-	do
-		log "Building '$i'"
-		search_build_script "$i"
-		local script="$build_script"
-
-		if [ -z "$script" ]; then
-			log "No build script for '$i'"
-			exit 1
-		fi
-
-		if run_build_script "$i" "$script"; then
-			log "Done with '$i'"
-		else
-			log "'$script' failed"
-			exit 1
-		fi
-	done
+	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "a"
 }
 
 redo_graph() {
@@ -180,31 +170,45 @@ redo_graph() {
 	local j
 
 	echo "digraph redo {"
-	local files=`cd $REDO_DB_DIR; find . -maxdepth 1 -mindepth 1 -type d`
+	local files=`cd $REDO_DB_DIR; find . -type f -path '*/.redo/type'`
 	if [ ! -z "$files" ]; then
 		for i in $files
 		do
-			db_get_type "$i"
+			local filename="${i%/.redo/type}"
+			db_get_type "$filename"
 			local file_type="$db_result"
 			local attrs=
-			if [ "$file_type" = "s" ]; then
-				attrs="[ shape=box ]"
-			else
-				attrs="[ shape=ellipse ]"
-			fi
-			echo "	\"$i\" $attrs"
+			case $file_type in
+				s)
+					attrs="[ shape=box ]"
+					;;
+				t)
+					attrs="[ shape=ellipse ]"
+					;;
+				a)
+					attrs="[ shape=diamond ]"
+					;;
+				*)
+					attrs="[ ]"
+					;;
+			esac
+			echo "	\"$filename\" $attrs"
 
-			db_get_prereqs "$i"
+			db_get_prereqs "$filename"
 			local prereqs="$db_result"
 			if [ ! -z "$prereqs" ]; then
 				for j in $prereqs
 				do
-					echo "	\"$i\" -> \"$j\";"
+					echo "	\"$filename\" -> \"$j\";"
 				done
 			fi
 		done
 	fi
 	echo "}"
+}
+
+redo_log() {
+	echo "${REDO_LOG_PREFIX}${*}" >&2
 }
 
 redo_run() {
@@ -213,21 +217,53 @@ redo_run() {
 	REDO_PARENT=$1
 	export REDO_PARENT
 	export PATH="$REDO_PATH"
-	export REDO_LOG_PREFIX="$REDO_LOG_PREFIX"
 	export PS4="$REDO_LOG_PREFIX> "
 	sh -ex $REDO_SCRIPT $*
 }
 
+redo_clean() {
+	local i
+	local types=`find .redo -path '*/.redo/type'`
+	for i in $types
+	do
+		local full_key_path=`readlink -f $i`
+		local file_path="${full_key_path#${REDO_DB_DIR}/}"
+		file_path="${file_path%/.redo/type}"
+
+		local file_type=`cat $i`
+		case $file_type in
+			s)
+				if [ ! -f $file_path ]; then
+					local entry_path="$REDO_DB_DIR/$file_path"
+					rm -rf $entry_path
+					redo_log "Removed db entry for missing source: '$file_path'"
+				fi
+				;;
+			t|a)
+				if [ -f "$file_path" ]; then
+					rm -f "$file_path"
+					redo_log "Removed target $file_path"
+				fi
+				;;
+		esac
+	done
+}
+
 with_parent() {
-	local old_indent="$REDO_LOG_PREFIX"
 	local old_parent="$REDO_PARENT"
 	REDO_PARENT="$1"
-	REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
 	local cmd="$2"
 	shift 2
-	"$cmd" $*
+	log_wrap "$cmd" $*
 	REDO_PARENT="$old_parent"
-	REDO_LOG_PREFIX="$old_indent"
+}
+
+log_wrap() {
+	redo_log "${*:-<main>}"
+	local old_prefix="$REDO_LOG_PREFIX"
+	REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
+	"$@"
+	REDO_LOG_PREFIX="$old_prefix"
 }
 
 db_get_type() {
@@ -341,7 +377,7 @@ db_affirm_key() {
 	fi
 }
 
-search_build_script() {
+find_build_script() {
 	build_script="${1}.do"
 	if [ -f "$build_script" ]; then
 		return 0
@@ -351,21 +387,23 @@ search_build_script() {
 }
 
 run_build_script() {
-	log "Building '$1' using '$2'"
-	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs/*"
+	redo_log "Building '$1' using '$2'"
+	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs"
 	db_add_prereq "$1" "$2"
 	db_update_own_checksum "$2"
 	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
 	local script_path=`readlink -f "$2"`
 	local target_basename=`basename "$1"`
+	export REDO_LOG_PREFIX
 	$REDO_BIN_DIR/redo-run \
 		"$script_path" "$1" "$target_basename" "$temp_file" > "$temp_file"
-	if [ $? -eq 0 ]; then
+	local status="$?"
+	if [ $status -eq 0 ]; then
 		rm -f "$1"
 		mv "$temp_file" "$1"
 		return 0
 	else
-		return 1
+		return $status
 	fi
 }
 
@@ -382,18 +420,15 @@ register_cmds() {
 }
 
 try_dispatch_cmd() {
-	local func_name="redo_${1#redo-}"
+	local cmd_name="$1"
+	local func_name="redo_${cmd_name}"
 	shift
-	if type $func_name > /dev/null; then
+	if type $func_name 2>&1 > /dev/null; then
 		$func_name $*
 	else
-		log "redo: invalid command '$name'"
+		redo_log "redo: invalid command 'redo-${cmd_name}'"
 		exit 1
 	fi
-}
-
-log() {
-	echo "${REDO_LOG_PREFIX}${REDO_PARENT:-<main>}: $*" >&2
 }
 
 main $*
