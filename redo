@@ -1,13 +1,14 @@
 #!/bin/sh -e
 
 main() {
-	if [ -z "$REDO_DB_DIR" ]; then
-		export REDO_DB_DIR=`readlink -f ./.redo`
-		mkdir -p "$REDO_DB_DIR"
-	fi
-
 	if [ -z "$REDO" ]; then
 		export REDO=`readlink -f $0`
+		export REDO_META_DIR=`readlink -f ./.redo`
+		mkdir -p "$REDO_META_DIR"
+		export REDO_BIN_DIR="$REDO_META_DIR/bin"
+		mkdir -p "$REDO_BIN_DIR"
+		export REDO_DB_DIR="$REDO_META_DIR/db"
+		mkdir -p "$REDO_DB_DIR"
 	fi
 
 	register_cmds ifchange ifcreate always graph run
@@ -210,7 +211,7 @@ redo_run() {
 	shift
 	REDO_PARENT=$1
 	export REDO_PARENT
-	export PATH="$REDO_DB_DIR:$PATH"
+	export PATH="$REDO_BIN_DIR:$PATH"
 	export REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
 	export PS4="$REDO_LOG_PREFIX> "
 	sh -ex $REDO_SCRIPT $*
@@ -356,7 +357,7 @@ run_build_script() {
 	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
 	local script_path=`readlink -f "$2"`
 	local target_basename=`basename "$1"`
-	$REDO_DB_DIR/redo-run \
+	$REDO_BIN_DIR/redo-run \
 		"$script_path" "$1" "$target_basename" "$temp_file" > "$temp_file"
 	if [ $? -eq 0 ]; then
 		rm -f "$1"
@@ -371,7 +372,7 @@ register_cmds() {
 	local i
 	for i in "$@"
 	do
-		local link_target="$REDO_DB_DIR/redo-${i}"
+		local link_target="$REDO_BIN_DIR/redo-${i}"
 		if [ `readlink -f "$link_target"` != "$REDO" ]; then
 			rm -f "$link_target"
 			ln -s "$REDO" "$link_target"
