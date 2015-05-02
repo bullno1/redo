@@ -10,12 +10,11 @@ main() {
 		export REDO=`readlink -f $0`
 	fi
 
-	if [ ! -f "$REDO_DB_DIR/redo-ifchange" ]; then
-		ln -s "$REDO" "$REDO_DB_DIR/redo-ifchange"
-		ln -s "$REDO" "$REDO_DB_DIR/redo-ifcreate"
-		ln -s "$REDO" "$REDO_DB_DIR/redo-always"
-		ln -s "$REDO" "$REDO_DB_DIR/redo-run"
-	fi
+	affirm_link redo-ifchange
+	affirm_link redo-ifcreate
+	affirm_link redo-always
+	affirm_link redo-graph
+	affirm_link redo-run
 
 	local name=`basename $0`
 
@@ -34,6 +33,9 @@ main() {
 			;;
 		"redo-run")
 			redo_run $*
+			;;
+		"redo-graph")
+			redo_graph $*
 			;;
 		*)
 			log "Invalid command '$name'"
@@ -187,6 +189,38 @@ redo_always() {
 	done
 
 	cmd_name="$old_cmd"
+}
+
+redo_graph() {
+	local i
+	local j
+
+	echo "digraph redo {"
+	local files=`cd $REDO_DB_DIR; find . -maxdepth 1 -mindepth 1 -type d`
+	if [ ! -z "$files" ]; then
+		for i in $files
+		do
+			db_get_type "$i"
+			local file_type="$db_result"
+			local attrs=
+			if [ "$file_type" = "s" ]; then
+				attrs="[ shape=box ]"
+			else
+				attrs="[ shape=ellipse ]"
+			fi
+			echo "	\"$i\" $attrs"
+
+			db_get_prereqs "$i"
+			local prereqs="$db_result"
+			if [ ! -z "$prereqs" ]; then
+				for j in $prereqs
+				do
+					echo "	\"$i\" -> \"$j\";"
+				done
+			fi
+		done
+	fi
+	echo "}"
 }
 
 redo_run() {
@@ -347,6 +381,14 @@ run_build_script() {
 		return 0
 	else
 		return 1
+	fi
+}
+
+affirm_link() {
+	local link_target=$REDO_DB_DIR/$1
+	if [ `readlink -f "$link_target"` != "$REDO" ]; then
+		rm -f "$link_target"
+		ln -s "$REDO" "$link_target"
 	fi
 }
 
