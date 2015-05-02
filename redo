@@ -52,9 +52,6 @@ redo() {
 redo_ifchange() {
 	local i
 	local j
-
-	local old_cmd="$cmd_name"
-	cmd_name="redo-ifchange"
 	for i in "$@"
 	do
 		#TODO: Normalize path
@@ -96,13 +93,18 @@ redo_ifchange() {
 		if [ ! -z "$prereqs" ]; then
 			for j in $prereqs
 			do
+				log "Checking prereqs '$j' of '$i'"
+
+				# Update prereq if needed
 				if db_outdated "$j"; then
 					with_parent "$i" redo_ifchange "$j"
+				fi
 
-					if db_prereq_rebuilt "$i" "$j"; then
-						log "'$j' was updated"
-						must_build="y"
-					fi
+				# Even if prereq is up-to-date, we may still depend on an old
+				# version of it, so check if it was rebuilt since last time
+				if db_prereq_rebuilt "$i" "$j"; then
+					log "'$j' was updated"
+					must_build="y"
 				fi
 			done
 		fi
@@ -147,28 +149,18 @@ redo_ifchange() {
 			exit 1
 		fi
 	done
-
-	cmd_name="$old_cmd"
 }
 
 redo_ifcreate() {
 	local i
-	local old_cmd="$old_cmd"
-	cmd_name="redo-ifcreate"
-
 	for i in "$@"
 	do
 		db_add_ifcreate_prereq "$REDO_PARENT" "$i"
 	done
-
-	cmd_name="$old_cmd"
 }
 
 redo_always() {
 	local i
-	local old_cmd="$old_cmd"
-	cmd_name="redo-always"
-
 	for i in "$@"
 	do
 		log "Building '$i'"
@@ -187,8 +179,6 @@ redo_always() {
 			exit 1
 		fi
 	done
-
-	cmd_name="$old_cmd"
 }
 
 redo_graph() {
@@ -229,16 +219,21 @@ redo_run() {
 	REDO_PARENT=$1
 	export REDO_PARENT
 	export PATH="$REDO_DB_DIR:$PATH"
+	export REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
+	export PS4="$REDO_LOG_PREFIX> "
 	sh -ex $REDO_SCRIPT $*
 }
 
 with_parent() {
+	local old_indent="$REDO_LOG_PREFIX"
 	local old_parent="$REDO_PARENT"
 	REDO_PARENT="$1"
+	REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
 	local cmd="$2"
 	shift 2
 	"$cmd" $*
 	REDO_PARENT="$old_parent"
+	REDO_LOG_PREFIX="$old_indent"
 }
 
 db_get_type() {
@@ -313,10 +308,7 @@ db_update_prereqs_checksums() {
 }
 
 db_reset_uptodate() {
-	local files=`find .redo -path '*/.redo/uptodate'`
-	if [ ! -z "$files" ]; then
-		rm $files
-	fi
+	find .redo -path '*/.redo/uptodate' -exec rm '{}' \;
 }
 
 db_mark_as_uptodate() {
@@ -393,7 +385,7 @@ affirm_link() {
 }
 
 log() {
-	echo "$cmd_name($REDO_PARENT): $*" >&2
+	echo "${REDO_LOG_PREFIX}${REDO_PARENT:-<main>}: $*" >&2
 }
 
 main $*
