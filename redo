@@ -10,43 +10,36 @@ main() {
 		export REDO=`readlink -f $0`
 	fi
 
-	affirm_link redo-ifchange
-	affirm_link redo-ifcreate
-	affirm_link redo-always
-	affirm_link redo-graph
-	affirm_link redo-run
+	register_cmds ifchange ifcreate always graph run
 
 	local name=`basename $0`
 
 	case $name in
-		"redo")
+		redo)
 			redo $*
 			;;
-		"redo-ifchange")
-			redo_ifchange $*
-			;;
-		"redo-ifcreate")
-			redo_ifcreate $*
-			;;
-		"redo-always")
-			redo_always $*
-			;;
-		"redo-run")
-			redo_run $*
-			;;
-		"redo-graph")
-			redo_graph $*
+		redo-*)
+			try_dispatch_cmd "${name#redo-}" $*
 			;;
 		*)
-			log "Invalid command '$name'"
+			log "redo: invalid command '$name'"
 			exit 1
 			;;
 	esac
 }
 
 redo() {
-	db_reset_uptodate
-	redo_ifchange all
+	case $1 in
+		--*)
+			local cmd=${1#--}
+			shift
+			try_dispatch_cmd "$cmd" $*
+			;;
+		*)
+			db_reset_uptodate
+			redo_ifchange all
+			;;
+	esac
 }
 
 redo_ifchange() {
@@ -54,7 +47,6 @@ redo_ifchange() {
 	local j
 	for i in "$@"
 	do
-		#TODO: Normalize path
 		db_add_prereq "$REDO_PARENT" "$i"
 
 		db_get_type "$i"
@@ -270,7 +262,6 @@ db_get_prereqs() {
 }
 
 db_add_ifcreate_prereq() {
-	#TODO: switch type warning
 	local key="$REDO_DB_DIR/$1/.redo/ifcreate/$2"
 	db_affirm_key "$key"
 	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs/$2"
@@ -376,11 +367,26 @@ run_build_script() {
 	fi
 }
 
-affirm_link() {
-	local link_target=$REDO_DB_DIR/$1
-	if [ `readlink -f "$link_target"` != "$REDO" ]; then
-		rm -f "$link_target"
-		ln -s "$REDO" "$link_target"
+register_cmds() {
+	local i
+	for i in "$@"
+	do
+		local link_target="$REDO_DB_DIR/redo-${i}"
+		if [ `readlink -f "$link_target"` != "$REDO" ]; then
+			rm -f "$link_target"
+			ln -s "$REDO" "$link_target"
+		fi
+	done
+}
+
+try_dispatch_cmd() {
+	local func_name="redo_${1#redo-}"
+	shift
+	if type $func_name > /dev/null; then
+		$func_name $*
+	else
+		log "redo: invalid command '$name'"
+		exit 1
 	fi
 }
 
