@@ -1,5 +1,14 @@
 #!/bin/sh -e
 
+OFF=0
+ERROR=1
+WARN=2
+INFO=3
+DEBUG=4
+TRACE=5
+REDO_LOG_LEVEL=${REDO_LOG_LEVEL:-${INFO}}
+DEFAULT_LEVEL=$DEBUG
+
 main() {
 	if [ -z "$REDO" ]; then
 		export REDO=`readlink -f $0`
@@ -23,7 +32,7 @@ main() {
 			try_dispatch_cmd "${name#redo-}" $*
 			;;
 		*)
-			redo_log "redo: invalid command '$name'"
+			redo_log -$ERROR "redo: invalid command '$name'"
 			exit 1
 			;;
 	esac
@@ -156,11 +165,11 @@ redo_ifchange() {
 				db_mark_as_uptodate "$i"
 				redo_log "Done with '$i'"
 			else
-				redo_log "'$script' failed"
+				redo_log -$ERROR "'$script' failed"
 				exit 1
 			fi
 		else
-			redo_log "No build script for '$i'"
+			redo_log -$ERROR "No build script for '$i'"
 			exit 1
 		fi
 	done
@@ -233,7 +242,16 @@ redo_graph() {
 }
 
 redo_log() {
-	echo "${REDO_LOG_PREFIX}${*}" >&2
+	local msg_level=$DEFAULT_LEVEL
+	case $1 in
+		-*)
+			msg_level=${1#-}
+			shift
+			;;
+	esac
+	if [ $msg_level -le $REDO_LOG_LEVEL ]; then
+		echo "${REDO_LOG_PREFIX}${*}" >&2
+	fi
 }
 
 redo_run() {
@@ -261,13 +279,13 @@ redo_clean() {
 				if [ ! -f $file_path ]; then
 					local entry_path="$REDO_DB_DIR/$file_path"
 					rm -rf $entry_path
-					redo_log "Removed db entry for missing source: '$file_path'"
+					redo_log -$INFO "Removed db entry for missing source: '$file_path'"
 				fi
 				;;
 			t|a)
 				if [ -f "$file_path" ]; then
 					rm -f "$file_path"
-					redo_log "Removed target $file_path"
+					redo_log -$INFO "Removed target $file_path"
 				fi
 				;;
 		esac
@@ -298,11 +316,23 @@ with_parent() {
 }
 
 log_wrap() {
+	local msg_level=$DEFAULT_LEVEL
+	case $1 in
+		-*)
+			msg_level=${1#-}
+			shift
+			;;
+	esac
 	redo_log "${*:-<main>}"
+
 	local old_prefix="$REDO_LOG_PREFIX"
-	REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
+	if [ $msg_level -le $REDO_LOG_LEVEL ]; then
+		REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
+	fi
 	"$@"
-	REDO_LOG_PREFIX="$old_prefix"
+	if [ $msg_level -le $REDO_LOG_LEVEL ]; then
+		REDO_LOG_PREFIX="$old_prefix"
+	fi
 }
 
 db_get_type() {
@@ -313,8 +343,8 @@ db_get_type() {
 		if [ -f "$1" ]; then
 			if find_build_script "$1"; then
 				db_result="t"
-				redo_log "Warning: '$1' is new but it already has a build script: '$build_script'"
-				redo_log "Please run 'redo --clean' before bulding"
+				redo_log -$WARN "'$1' is new but it already has a build script: '$build_script'"
+				redo_log -$WARN "Please run 'redo --clean' before bulding"
 			else
 				db_result="s"
 			fi
@@ -472,7 +502,7 @@ find_build_script() {
 }
 
 run_build_script() {
-	redo_log "Building '$1' using '$2'"
+	redo_log -$INFO "'$2' > '$1':"
 	db_add_prereq "$1" "$2"
 	db_update_own_checksum "$2"
 	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
@@ -508,10 +538,10 @@ try_dispatch_cmd() {
 	local cmd_name="$1"
 	local func_name="redo_${cmd_name}"
 	shift
-	if type $func_name 2>&1 > /dev/null; then
+	if type $func_name 1> /dev/null 2> /dev/null ; then
 		$func_name $*
 	else
-		redo_log "redo: invalid command 'redo-${cmd_name}'"
+		redo_log -$ERROR "redo: invalid command 'redo-${cmd_name}'"
 		exit 1
 	fi
 }
