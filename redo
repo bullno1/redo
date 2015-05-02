@@ -38,7 +38,11 @@ redo() {
 			;;
 		*)
 			db_reset_uptodate
-			redo_ifchange all
+			if [ "$#" -eq 0 ]; then
+				redo_ifchange all
+			else
+				redo_ifchange $*
+			fi
 			;;
 	esac
 }
