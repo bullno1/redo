@@ -141,6 +141,7 @@ redo_ifchange() {
 		rm -rf "$REDO_DB_DIR/$i/.redo/prereqs"
 		rm -rf "$REDO_DB_DIR/$i/.redo/ifcreate"
 		if find_build_script "$i"; then
+			with_parent "$i" redo_ifcreate $non_exist_build_scripts
 			local script="$build_script"
 			if run_build_script "$i" "$script"; then
 				# redo-always targets are always outdated so there's no need
@@ -307,7 +308,13 @@ db_get_type() {
 		db_result=`cat "$key"`
 	else
 		if [ -f "$1" ]; then
-			db_result="s"
+			if find_build_script "$1"; then
+				db_result="t"
+				redo_log "Warning: '$1' is new but it already has a build script: '$build_script'"
+				redo_log "Please run 'redo --clean' before bulding"
+			else
+				db_result="s"
+			fi
 		else
 			db_result="t"
 		fi
@@ -423,7 +430,7 @@ find_build_script() {
 		return 0
 	fi
 
-	local non_exist_build_scripts=
+	non_exist_build_scripts=
 	non_exist_build_scripts="${non_exist_build_scripts}${IFS}${build_script}"
 
 	local target_name=`basename "$1"`
@@ -446,7 +453,6 @@ find_build_script() {
 			local filename="${search_dir}/default.${search_base}"
 			if [ -f "$filename" ]; then
 				build_script="$filename"
-				with_parent "$1" redo_ifcreate $non_exist_build_scripts
 				return 0
 			else
 				non_exist_build_scripts="${non_exist_build_scripts}${IFS}${filename}"
