@@ -88,8 +88,8 @@ redo_ifchange() {
 			continue
 		fi
 
-		# A regular target file may not need to be rebuilt
-		if [ "$file_type" = "t" ]; then
+		# An existing regular target file may not need to be rebuilt
+		if [ "$file_type" = "t" ] && [ -f "$i" ]; then
 			local must_build="n"
 
 			# Check if prereqs are up-to-date
@@ -118,7 +118,7 @@ redo_ifchange() {
 			db_get_ifcreate_prereqs "$i"
 			local ifcreate_prereqs="$db_result"
 			if [ ! -z "$ifcreate_prereqs" ]; then
-				for j in "$ifcreate_prereqs"
+				for j in $ifcreate_prereqs
 				do
 					if [ -f "$j" ]; then
 						redo_log "'$j' was created"
@@ -129,7 +129,7 @@ redo_ifchange() {
 			fi
 
 			# If file exists and it is not required to build, bail out
-			if [ -f "$i" ] && [ "$must_build" = "n" ]; then
+			if [ "$must_build" = "n" ]; then
 				db_mark_as_uptodate "$i"
 				redo_log "'$i' is up-to-date"
 				continue
@@ -137,21 +137,26 @@ redo_ifchange() {
 		fi
 
 		# Find and execute build script
-		find_build_script "$i"
-		local script="$build_script"
-
-		if [ ! -f "$script" ]; then
-			redo_log "No build script for '$i'"
-			exit 1
-		fi
-
-		if run_build_script "$i" "$script"; then
-			db_update_prereqs_checksums "$i"
-			db_update_own_checksum "$i" || true
-			db_mark_as_uptodate "$i"
-			redo_log "Done with '$i'"
+		rm -rf "$i"
+		rm -rf "$REDO_DB_DIR/$i/.redo/prereqs"
+		rm -rf "$REDO_DB_DIR/$i/.redo/ifcreate"
+		if find_build_script "$i"; then
+			local script="$build_script"
+			if run_build_script "$i" "$script"; then
+				# redo-always targets are always outdated so there's no need
+				# to update it's prereqs' checksums
+				if [ "$file_type" != "a" ]; then
+					db_update_prereqs_checksums "$i"
+				fi
+				db_update_own_checksum "$i" || true
+				db_mark_as_uptodate "$i"
+				redo_log "Done with '$i'"
+			else
+				redo_log "'$script' failed"
+				exit 1
+			fi
 		else
-			redo_log "'$script' failed"
+			redo_log "No build script for '$i'"
 			exit 1
 		fi
 	done
@@ -179,8 +184,11 @@ redo_graph() {
 		for i in $files
 		do
 			local filename="${i%/.redo/type}"
-			db_get_type "$filename"
-			local file_type="$db_result"
+			local file_type=
+			if db_has_type "$filename"; then
+				db_get_type "$filename"
+				file_type="$db_result"
+			fi
 			local attrs=
 			case $file_type in
 				s)
@@ -204,6 +212,15 @@ redo_graph() {
 				for j in $prereqs
 				do
 					echo "	\"$filename\" -> \"$j\";"
+				done
+			fi
+
+			db_get_ifcreate_prereqs "$filename"
+			local ifcreate_prereqs="$db_result"
+			if [ ! -z "$ifcreate_prereqs" ]; then
+				for j in $ifcreate_prereqs
+				do
+					echo "	\"$filename\" -> \"$j\" [ arrowhead=box, color=red ];"
 				done
 			fi
 		done
@@ -282,6 +299,11 @@ db_get_type() {
 		fi
 		db_write "$key" "$db_result"
 	fi
+}
+
+db_has_type() {
+	local key="$REDO_DB_DIR/$1/.redo/type"
+	[ -f "$key" ]
 }
 
 db_add_prereq() {
@@ -387,12 +409,47 @@ find_build_script() {
 		return 0
 	fi
 
-	with_parent "$1" redo_ifcreate "$build_script"
+	local non_exist_build_scripts=
+	non_exist_build_scripts="${non_exist_build_scripts}${IFS}${build_script}"
+
+	local target_name=`basename "$1"`
+	local search_dir=`dirname "$1"`
+	local do_search_dir="y"
+	while [ "$do_search_dir" = "y" ]
+	do
+		if [ "$search_dir" = "." ]; then
+			do_search_dir="n"
+		fi
+
+		local search_base="${target_name#*.}.do"
+		local do_search_name="y"
+		while [ "$do_search_name" = "y" ]
+		do
+			if [ "$search_base" = "do" ]; then
+				do_search_name="n"
+			fi
+
+			local filename="${search_dir}/default.${search_base}"
+			if [ -f "$filename" ]; then
+				build_script="$filename"
+				with_parent "$1" redo_ifcreate $non_exist_build_scripts
+				return 0
+			else
+				non_exist_build_scripts="${non_exist_build_scripts}${IFS}${filename}"
+			fi
+
+			search_base="${search_base#*.}"
+		done
+
+		search_dir=`dirname "$search_dir"`
+	done
+
+	build_script=
+	return 1
 }
 
 run_build_script() {
 	redo_log "Building '$1' using '$2'"
-	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs"
 	db_add_prereq "$1" "$2"
 	db_update_own_checksum "$2"
 	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
@@ -403,7 +460,6 @@ run_build_script() {
 		"$script_path" "$1" "$target_basename" "$temp_file" > "$temp_file"
 	local status="$?"
 	if [ $status -eq 0 ]; then
-		rm -f "$1"
 		mv "$temp_file" "$1"
 		return 0
 	else
