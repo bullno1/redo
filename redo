@@ -19,7 +19,7 @@ main() {
 		export REDO_DB_DIR="$REDO_META_DIR/db"
 		mkdir -p "$REDO_DB_DIR"
 		export REDO_PATH="$REDO_BIN_DIR:$PATH"
-		register_cmds ifchange ifcreate always graph run log
+		register_cmds ifchange ifcreate always graph run log targets sources
 	fi
 
 	local name=`basename $0`
@@ -296,9 +296,43 @@ redo_clean() {
 	done
 }
 
+redo_targets() {
+	enum_files print_target
+}
+
+redo_sources() {
+	enum_files print_source
+}
+
+print_target() {
+	if [ "$1" = "t" ] || [ "$1" = "a" ]; then
+		echo $2
+	fi
+}
+
+print_source() {
+	if [ "$1" = "s" ]; then
+		echo $2
+	fi
+}
+
+enum_files() {
+	local i
+	local types=`find .redo -path '*/.redo/type'`
+	for i in $types
+	do
+		local full_key_path=`readlink -f $i`
+		local file_path="${full_key_path#${REDO_DB_DIR}/}"
+		file_path="${file_path%/.redo/type}"
+
+		local file_type=`cat $i`
+		$1 $file_type $file_path
+	done
+}
+
 redo_activate() {
 	local old_path="$PATH"
-	local new_path="`dirname $REDO`:$PATH"
+	local new_path="`dirname $REDO`:$REDO_PATH"
 	activate_script=`cat << SCRIPT
 PATH="$new_path"
 
