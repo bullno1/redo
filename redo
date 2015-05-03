@@ -98,7 +98,7 @@ redo_ifchange() {
 		fi
 
 		# An existing regular target file may not need to be rebuilt
-		if [ "$file_type" = "t" ] && [ -f "$i" ]; then
+		if [ "$file_type" = "t" ] && [ -e "$i" ]; then
 			local must_build="n"
 
 			# Check if prereqs are up-to-date
@@ -129,7 +129,7 @@ redo_ifchange() {
 			if [ ! -z "$ifcreate_prereqs" ]; then
 				for j in $ifcreate_prereqs
 				do
-					if [ -f "$j" ]; then
+					if [ -e "$j" ]; then
 						redo_log "'$j' was created"
 						must_build="y"
 						break
@@ -283,8 +283,8 @@ redo_clean() {
 				fi
 				;;
 			t|a)
-				if [ -f "$file_path" ]; then
-					rm -f "$file_path"
+				if [ -e "$file_path" ]; then
+					rm -rf "$file_path"
 					redo_log -$INFO "Removed target $file_path"
 				fi
 				;;
@@ -340,7 +340,7 @@ db_get_type() {
 	if [ -f "$key" ]; then
 		db_result=`cat "$key"`
 	else
-		if [ -f "$1" ]; then
+		if [ -e "$1" ]; then
 			if find_build_script "$1"; then
 				db_result="t"
 				redo_log -$WARN "'$1' is new but it already has a build script: '$build_script'"
