@@ -19,7 +19,7 @@ main() {
 		export REDO_DB_DIR="$REDO_META_DIR/db"
 		mkdir -p "$REDO_DB_DIR"
 		export REDO_PATH="$REDO_BIN_DIR:$PATH"
-		register_cmds ifchange ifcreate always graph run log targets sources
+		register_cmds ifchange ifcreate always graph run log targets sources gc
 	fi
 
 	local name=`basename $0`
@@ -268,32 +268,8 @@ redo_run() {
 	sh -ex $REDO_SCRIPT $*
 }
 
-redo_clean() {
-	local i
-	local types=`find .redo -path '*/.redo/type'`
-	for i in $types
-	do
-		local full_key_path=`readlink -f $i`
-		local file_path="${full_key_path#${REDO_DB_DIR}/}"
-		file_path="${file_path%/.redo/type}"
-
-		local file_type=`cat $i`
-		case $file_type in
-			s)
-				if [ ! -f $file_path ]; then
-					local entry_path="$REDO_DB_DIR/$file_path"
-					rm -rf $entry_path
-					redo_log -$INFO "Removed db entry for missing source: '$file_path'"
-				fi
-				;;
-			t|a)
-				if [ -e "$file_path" ]; then
-					rm -rf "$file_path"
-					redo_log -$INFO "Removed target $file_path"
-				fi
-				;;
-		esac
-	done
+redo_gc() {
+	enum_files gc
 }
 
 redo_targets() {
@@ -314,6 +290,28 @@ print_source() {
 	if [ "$1" = "s" ]; then
 		echo $2
 	fi
+}
+
+gc() {
+	local entry_path="$REDO_DB_DIR/$2"
+	case $1 in
+		s)
+			if [ ! -e $2 ]; then
+				rm -rf $entry_path
+				redo_log -$INFO "Removed db entry for '$2' (non-existent source)"
+			fi
+			;;
+		t|a)
+			if [ ! -e "$2" ]; then
+				if find_build_script "$2"; then
+					return 0
+				fi
+
+				rm -rf $entry_path
+				redo_log -$INFO "Removed db entry for '$2' (target without build script)"
+			fi
+			;;
+	esac
 }
 
 enum_files() {
