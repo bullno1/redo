@@ -179,7 +179,11 @@ redo_ifcreate() {
 	local i
 	for i in "$@"
 	do
-		db_add_ifcreate_prereq "$REDO_PARENT" "$i"
+		if [ ! -e "$i" ]; then
+			db_add_ifcreate_prereq "$REDO_PARENT" "$i"
+		else
+			redo_log -$ERROR "'$i' exists"
+		fi
 	done
 }
 
@@ -380,6 +384,10 @@ db_get_prereqs() {
 }
 
 db_add_ifcreate_prereq() {
+	if [ -z "$1" ]; then
+		return 0
+	fi
+
 	local key="$REDO_DB_DIR/$1/.redo/ifcreate/$2"
 	db_affirm_key "$key"
 	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs/$2"
