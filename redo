@@ -20,7 +20,7 @@ main() {
 		mkdir -p "$REDO_DB_DIR"
 		export REDO_PATH="$REDO_BIN_DIR:$PATH"
 		export REDO_TIMESTAMP=`date +%s`
-		register_cmds ifchange ifcreate always graph run log targets sources gc
+		register_cmds ifchange ifcreate always phony graph log targets sources gc
 	fi
 
 	local name=`basename $0`
@@ -33,7 +33,7 @@ main() {
 			try_dispatch_cmd "${name#redo-}" $*
 			;;
 		*)
-			info_log -$ERROR "redo: invalid command '$name'"
+			info_log -$ERROR "Invalid command '$name'"
 			exit 1
 			;;
 	esac
@@ -71,15 +71,15 @@ _redo() {
 		rm -rf "$REDO_DB_DIR/$i/.redo/prereqs"
 		rm -rf "$REDO_DB_DIR/$i/.redo/ifcreate"
 		if find_build_script "$i"; then
-			# an "always" target doesn't care about prereq
-			if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" != "a" ]; then
+			# only regular target cares about prereq
+			if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" = "tr" ]; then
 				with_parent "$i" redo_ifcreate $non_exist_build_scripts
 			fi
 			local script="$build_script"
 			if run_build_script "$i" "$script"; then
-				# redo-always targets are always outdated so there's no need
-				# to update it's prereqs' checksums
-				if [ "$file_type" != "a" ]; then
+				# an always or phony target is always outdated so there's no need
+				# to update its prereqs' checksums
+				if [ "$file_type" = "tr" ]; then
 					db_update_prereqs_checksums "$i"
 				fi
 				db_update_own_checksum "$i" || true
@@ -105,20 +105,24 @@ redo_ifchange() {
 
 		db_get_type "$i"
 		local file_type="$db_result"
+
 		local file_type_name=
 		case $file_type in
 			s)
-				file_type_name="source"
+				file_type_name="source file"
 				;;
-			t)
-				file_type_name="target"
+			tr)
+				file_type_name="regular target"
 				;;
-			a)
+			ta)
 				file_type_name="live target"
+				;;
+			tp)
+				file_type_name="phony target"
 				;;
 		esac
 
-		info_log "Checking $file_type_name file '$i'"
+		info_log "Checking $file_type_name '$i'"
 
 		if db_is_uptodate "$i"; then
 			info_log "'$i' was checked previously"
@@ -138,7 +142,7 @@ redo_ifchange() {
 		fi
 
 		# An existing regular target file may not need to be rebuilt
-		if [ "$file_type" = "t" ] && [ -e "$i" ]; then
+		if [ "$file_type" = "tr" ] && [ -e "$i" ]; then
 			local must_build="n"
 
 			# Check if prereqs are up-to-date
@@ -202,7 +206,11 @@ redo_ifcreate() {
 }
 
 redo_always() {
-	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "a"
+	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "ta"
+}
+
+redo_phony() {
+	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "tp"
 }
 
 redo_graph() {
@@ -225,11 +233,14 @@ redo_graph() {
 				s)
 					attrs="[ shape=box ]"
 					;;
-				t)
+				tr)
 					attrs="[ shape=ellipse ]"
 					;;
-				a)
+				ta)
 					attrs="[ shape=diamond ]"
+					;;
+				tp)
+					attrs="[ shape=diamond, color=green ]"
 					;;
 				*)
 					attrs="[ ]"
@@ -260,7 +271,14 @@ redo_graph() {
 }
 
 redo_log() {
-	info_log $*
+	case $1 in
+		-*)
+			info_log $*
+		;;
+		*)
+			info_log -$INFO $*
+		;;
+	esac
 }
 
 redo_run() {
@@ -293,9 +311,13 @@ redo_sources() {
 }
 
 print_target() {
-	if [ "$1" = "t" ] || [ "$1" = "a" ]; then
-		echo $2
-	fi
+	case $1 in
+		t*)
+			echo $2
+			;;
+		*)
+			;;
+	esac
 }
 
 print_source() {
@@ -313,7 +335,7 @@ gc() {
 				info_log -$INFO "Removed db entry for '$2' (non-existent source)"
 			fi
 			;;
-		t|a)
+		t*)
 			if [ ! -e "$2" ]; then
 				if find_build_script "$2"; then
 					return 0
@@ -370,14 +392,14 @@ db_get_type() {
 	else
 		if [ -e "$1" ]; then
 			if find_build_script "$1"; then
-				db_result="t"
+				db_result="tr"
 				info_log -$WARN "'$1' is new but it already has a build script: '$build_script'"
 				info_log -$WARN "Please run 'redo --clean' before bulding"
 			else
 				db_result="s"
 			fi
 		else
-			db_result="t"
+			db_result="tr"
 		fi
 		db_write "$key" "$db_result"
 	fi
@@ -427,7 +449,7 @@ db_get_ifcreate_prereqs() {
 }
 
 db_update_own_checksum() {
-	local checksum=`sha1sum "$1" | cut -d' ' -f1`
+	local checksum=`sha1sum "$1" 2> /dev/null | cut -d' ' -f1`
 	local key="$REDO_DB_DIR/$1/.redo/checksum"
 	db_affirm_key "$key"
 	local old_checksum=`cat "$key"`
@@ -551,13 +573,17 @@ run_build_script() {
 	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
 	local script_path=`readlink -f "$2"`
 	local target_basename=`basename "$1"`
-	$REDO_BIN_DIR/redo-run \
+	$REDO --run \
 		"$script_path" "$1" "$target_basename" "$temp_file" > "$temp_file"
 	local status="$?"
 	if [ $status -eq 0 ]; then
-		local target_dir=`dirname "$1"`
-		mkdir -p "$target_dir"
-		mv "$temp_file" "$1"
+		db_get_type "$1"
+		local file_type="$db_result"
+		if [ "$file_type" != "tp" ]; then
+			local target_dir=`dirname "$1"`
+			mkdir -p "$target_dir"
+			mv "$temp_file" "$1"
+		fi
 		return 0
 	else
 		return $status
@@ -583,7 +609,7 @@ try_dispatch_cmd() {
 	if type $func_name 1> /dev/null 2> /dev/null ; then
 		$func_name $*
 	else
-		info_log -$ERROR "redo: invalid command 'redo-${cmd_name}'"
+		info_log -$ERROR "Invalid command 'redo-${cmd_name}'"
 		exit 1
 	fi
 }
