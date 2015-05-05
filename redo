@@ -20,6 +20,7 @@ main() {
 		mkdir -p "$REDO_DB_DIR"
 		export REDO_PATH="$REDO_BIN_DIR:$PATH"
 		export REDO_TIMESTAMP=`date +%s`
+		ensure_symlink "$REDO_BIN_DIR/redo"
 		register_cmds \
 			ifchange ifcreate always phony graph log targets sources gc clean
 	fi
@@ -609,12 +610,15 @@ register_cmds() {
 	local i
 	for i in "$@"
 	do
-		local link_target="$REDO_BIN_DIR/redo-${i}"
-		if [ `readlink -f "$link_target"` != "$REDO" ]; then
-			rm -f "$link_target"
-			ln -s "$REDO" "$link_target"
-		fi
+		ensure_symlink "$REDO_BIN_DIR/redo-${i}"
 	done
+}
+
+ensure_symlink() {
+	if [ `readlink -f "$1"` != "$REDO" ]; then
+		rm -f "$1"
+		ln -s "$REDO" "$1"
+	fi
 }
 
 try_dispatch_cmd() {
