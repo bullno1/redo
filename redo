@@ -20,7 +20,8 @@ main() {
 		mkdir -p "$REDO_DB_DIR"
 		export REDO_PATH="$REDO_BIN_DIR:$PATH"
 		export REDO_TIMESTAMP=`date +%s`
-		register_cmds ifchange ifcreate always phony graph log targets sources gc
+		register_cmds \
+			ifchange ifcreate always phony graph log targets sources gc clean
 	fi
 
 	local name=`basename $0`
@@ -312,6 +313,10 @@ redo_gc() {
 	enum_files gc
 }
 
+redo_clean() {
+	rm -rf `$REDO --targets`
+}
+
 redo_targets() {
 	enum_files print_target
 }
@@ -404,7 +409,7 @@ db_get_type() {
 			if find_build_script "$1"; then
 				db_result="tr"
 				info_log -$WARN "'$1' is new but it already has a build script: '$build_script'"
-				info_log -$WARN "Please run 'redo --clean' before bulding"
+				info_log -$WARN "Please run 'redo-clean' before bulding"
 			else
 				db_result="s"
 			fi
