@@ -7,4 +7,5 @@ do
 	test_name=${i%.do}
 	redo "$test_name" || STATUS=1
 done
+[ $STATUS -eq 0 ] && redo-log "All tests passed"
 exit $STATUS

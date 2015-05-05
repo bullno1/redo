@@ -307,6 +307,7 @@ redo_run() {
 	else
 		shell_flag=-e
 	fi
+	cd `dirname $REDO_SCRIPT`
 	sh $shell_flag $REDO_SCRIPT $*
 }
 
