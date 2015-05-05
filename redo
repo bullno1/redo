@@ -382,7 +382,7 @@ enum_files() {
 
 redo_activate() {
 	local old_path="$PATH"
-	local new_path="`dirname $REDO`:$REDO_PATH"
+	local new_path="$REDO_PATH"
 	activate_script=`cat << SCRIPT
 PATH="$new_path"
 
