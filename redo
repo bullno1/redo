@@ -46,7 +46,7 @@ redo() {
 			try_dispatch_cmd "$cmd" $*
 			;;
 		*)
-			db_reset_uptodate
+			export REDO_TIMESTAMP=`date +%s`
 			if [ "$#" -eq 0 ]; then
 				redo_ifchange all
 			else
@@ -456,20 +456,31 @@ db_update_prereqs_checksums() {
 	fi
 }
 
-db_reset_uptodate() {
-	find .redo -path '*/.redo/uptodate' -exec rm '{}' \;
-}
-
 db_mark_as_uptodate() {
-	db_affirm_key "$REDO_DB_DIR/$1/.redo/uptodate"
+	local key="$REDO_DB_DIR/$1/.redo/uptodate"
+	local key_dir=`dirname "$key"`
+	mkdir -p "$key_dir"
+	touch "$key"
 }
 
 db_is_uptodate() {
-	[ -f "$REDO_DB_DIR/$1/.redo/uptodate" ]
+	local key="$REDO_DB_DIR/$1/.redo/uptodate"
+	if [ -f "$key" ]; then
+		local timestamp=`stat -c %Y "$key"`
+		[ "$REDO_TIMESTAMP" -le "$timestamp" ]
+	else
+		return 1
+	fi
 }
 
 db_outdated() {
-	[ ! -f "$REDO_DB_DIR/$1/.redo/uptodate" ]
+	local key="$REDO_DB_DIR/$1/.redo/uptodate"
+	if [ -f "$key" ]; then
+		local timestamp=`stat -c %Y "$key"`
+		[ "$REDO_TIMESTAMP" -gt "$timestamp" ]
+	else
+		return 0
+	fi
 }
 
 db_prereq_rebuilt() {
