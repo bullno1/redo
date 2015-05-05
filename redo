@@ -7,7 +7,7 @@ INFO=3
 DEBUG=4
 TRACE=5
 REDO_LOG_LEVEL=${REDO_LOG_LEVEL:-${INFO}}
-DEFAULT_LEVEL=$DEBUG
+DEFAULT_LEVEL=$TRACE
 
 main() {
 	if [ -z "$REDO" ]; then
@@ -33,7 +33,7 @@ main() {
 			try_dispatch_cmd "${name#redo-}" $*
 			;;
 		*)
-			redo_log -$ERROR "redo: invalid command '$name'"
+			info_log -$ERROR "redo: invalid command '$name'"
 			exit 1
 			;;
 	esac
@@ -62,6 +62,7 @@ _redo() {
 	local i
 	for i in "$@"
 	do
+		cmd_log redo "$i"
 		db_get_type "$i"
 		local file_type="$db_result"
 
@@ -83,13 +84,13 @@ _redo() {
 				fi
 				db_update_own_checksum "$i" || true
 				db_mark_as_uptodate "$i"
-				redo_log "Done with '$i'"
+				info_log "Done with '$i'"
 			else
-				redo_log -$ERROR "'$script' failed"
+				info_log -$ERROR "'$script' failed"
 				exit 1
 			fi
 		else
-			redo_log -$ERROR "No build script for '$i'"
+			info_log -$ERROR "No build script for '$i'"
 			exit 1
 		fi
 	done
@@ -117,19 +118,19 @@ redo_ifchange() {
 				;;
 		esac
 
-		redo_log "Checking $file_type_name file '$i'"
+		info_log "Checking $file_type_name file '$i'"
 
 		if db_is_uptodate "$i"; then
-			redo_log "'$i' was checked previously"
+			info_log "'$i' was checked previously"
 			continue
 		fi
 
 		# A source file only need to have its hash updated
 		if [ "$file_type" = "s" ]; then
 			if db_update_own_checksum "$i"; then
-				redo_log "'$i' was updated"
+				info_log "'$i' was updated"
 			else
-				redo_log "'$i' is unchanged"
+				info_log "'$i' is unchanged"
 			fi
 			db_mark_as_uptodate "$i"
 
@@ -146,7 +147,7 @@ redo_ifchange() {
 			if [ ! -z "$prereqs" ]; then
 				for j in $prereqs
 				do
-					redo_log "Checking prereq '$j' of '$i'"
+					info_log "Checking prereq '$j' of '$i'"
 
 					# Update prereq if needed
 					if db_outdated "$j"; then
@@ -156,7 +157,7 @@ redo_ifchange() {
 					# Even if prereq is up-to-date, we may still depend on an old
 					# version of it, so check if it was rebuilt since last time
 					if db_prereq_rebuilt "$i" "$j"; then
-						redo_log "'$j' was updated"
+						info_log "'$j' was updated"
 						must_build="y"
 					fi
 				done
@@ -169,7 +170,7 @@ redo_ifchange() {
 				for j in $ifcreate_prereqs
 				do
 					if [ -e "$j" ]; then
-						redo_log "'$j' was created"
+						info_log "'$j' was created"
 						must_build="y"
 						break
 					fi
@@ -179,7 +180,7 @@ redo_ifchange() {
 			# If file exists and it is not required to build, bail out
 			if [ "$must_build" = "n" ]; then
 				db_mark_as_uptodate "$i"
-				redo_log "'$i' is up-to-date"
+				info_log "'$i' is up-to-date"
 				continue
 			fi
 		fi
@@ -195,7 +196,7 @@ redo_ifcreate() {
 		if [ ! -e "$i" ]; then
 			db_add_ifcreate_prereq "$REDO_PARENT" "$i"
 		else
-			redo_log -$ERROR "'$i' exists"
+			info_log -$ERROR "'$i' exists"
 		fi
 	done
 }
@@ -259,16 +260,7 @@ redo_graph() {
 }
 
 redo_log() {
-	local msg_level=$DEFAULT_LEVEL
-	case $1 in
-		-*)
-			msg_level=${1#-}
-			shift
-			;;
-	esac
-	if [ $msg_level -le $REDO_LOG_LEVEL ]; then
-		echo "${REDO_LOG_PREFIX}${*}" >&2
-	fi
+	info_log $*
 }
 
 redo_run() {
@@ -277,8 +269,15 @@ redo_run() {
 	REDO_PARENT=$1
 	export REDO_PARENT
 	export PATH="$REDO_PATH"
-	export PS4="$REDO_LOG_PREFIX> "
-	sh -ex $REDO_SCRIPT $*
+	export REDO_LOG_INDENT="$REDO_LOG_INDENT  "
+	local shell_flag=
+	if [ "$DEBUG" -le "$REDO_LOG_LEVEL" ]; then
+		export PS4="${REDO_LOG_INDENT}: > "
+		shell_flag=-ex
+	else
+		shell_flag=-e
+	fi
+	sh $shell_flag $REDO_SCRIPT $*
 }
 
 redo_gc() {
@@ -311,7 +310,7 @@ gc() {
 		s)
 			if [ ! -e $2 ]; then
 				rm -rf $entry_path
-				redo_log -$INFO "Removed db entry for '$2' (non-existent source)"
+				info_log -$INFO "Removed db entry for '$2' (non-existent source)"
 			fi
 			;;
 		t|a)
@@ -321,7 +320,7 @@ gc() {
 				fi
 
 				rm -rf $entry_path
-				redo_log -$INFO "Removed db entry for '$2' (target without build script)"
+				info_log -$INFO "Removed db entry for '$2' (target without build script)"
 			fi
 			;;
 	esac
@@ -360,28 +359,8 @@ with_parent() {
 	REDO_PARENT="$1"
 	local cmd="$2"
 	shift 2
-	log_wrap "$cmd" $*
+	"$cmd" $*
 	REDO_PARENT="$old_parent"
-}
-
-log_wrap() {
-	local msg_level=$DEFAULT_LEVEL
-	case $1 in
-		-*)
-			msg_level=${1#-}
-			shift
-			;;
-	esac
-	redo_log "${*:-<main>}"
-
-	local old_prefix="$REDO_LOG_PREFIX"
-	if [ $msg_level -le $REDO_LOG_LEVEL ]; then
-		REDO_LOG_PREFIX="$REDO_LOG_PREFIX  "
-	fi
-	"$@"
-	if [ $msg_level -le $REDO_LOG_LEVEL ]; then
-		REDO_LOG_PREFIX="$old_prefix"
-	fi
 }
 
 db_get_type() {
@@ -392,8 +371,8 @@ db_get_type() {
 		if [ -e "$1" ]; then
 			if find_build_script "$1"; then
 				db_result="t"
-				redo_log -$WARN "'$1' is new but it already has a build script: '$build_script'"
-				redo_log -$WARN "Please run 'redo --clean' before bulding"
+				info_log -$WARN "'$1' is new but it already has a build script: '$build_script'"
+				info_log -$WARN "Please run 'redo --clean' before bulding"
 			else
 				db_result="s"
 			fi
@@ -566,13 +545,12 @@ find_build_script() {
 }
 
 run_build_script() {
-	redo_log -$INFO "'$2' > '$1':"
+	info_log -$DEBUG "'$1' <- '$2'"
 	db_add_prereq "$1" "$2"
 	db_update_own_checksum "$2"
 	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
 	local script_path=`readlink -f "$2"`
 	local target_basename=`basename "$1"`
-	export REDO_LOG_PREFIX
 	$REDO_BIN_DIR/redo-run \
 		"$script_path" "$1" "$target_basename" "$temp_file" > "$temp_file"
 	local status="$?"
@@ -605,8 +583,29 @@ try_dispatch_cmd() {
 	if type $func_name 1> /dev/null 2> /dev/null ; then
 		$func_name $*
 	else
-		redo_log -$ERROR "redo: invalid command 'redo-${cmd_name}'"
+		info_log -$ERROR "redo: invalid command 'redo-${cmd_name}'"
 		exit 1
+	fi
+}
+
+info_log() {
+	local msg_level=$DEFAULT_LEVEL
+	case $1 in
+		-*)
+			msg_level=${1#-}
+			shift
+			;;
+	esac
+	if [ $msg_level -le $REDO_LOG_LEVEL ]; then
+		echo "${REDO_LOG_INDENT}: ${*}" >&2
+	fi
+}
+
+cmd_log() {
+	local cmd=$1
+	shift
+	if [ $INFO -le $REDO_LOG_LEVEL ]; then
+		echo "${REDO_LOG_INDENT}${cmd} ${*}" >&2
 	fi
 }
 
