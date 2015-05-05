@@ -206,10 +206,20 @@ redo_ifcreate() {
 }
 
 redo_always() {
+	if [ -z "$REDO_PARENT" ]; then
+		info_log -$ERROR "redo-always can only be called inside a do script"
+		exit 1
+	fi
+
 	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "ta"
 }
 
 redo_phony() {
+	if [ -z "$REDO_PARENT" ]; then
+		info_log -$ERROR "redo-phony can only be called inside a do script"
+		exit 1
+	fi
+
 	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "tp"
 }
 
