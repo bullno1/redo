@@ -50,6 +50,7 @@ redo() {
 			;;
 		*)
 			export REDO_TIMESTAMP=`date +%s`
+			REDO_PARENT=
 			local targets=
 			if [ "$#" -eq 0 ]; then
 				_redo all
