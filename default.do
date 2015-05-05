@@ -17,7 +17,7 @@ do_tests() {
 	local status=0
 
 	local test_scripts=`find t -mindepth 1 -maxdepth 1 -name '*.do' -type f`
-
+	export TEST_LIB=`readlink -f t/test.sh`
 	for i in $test_scripts
 	do
 		redo ${i%.do} || status=1

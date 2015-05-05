@@ -1,5 +1,5 @@
 redo-phony
-. `dirname $0`/test.sh
+. $TEST_LIB
 
 assert_cmd() {
 	assert [ $(readlink -f $(which $1)) = $REDO ]
