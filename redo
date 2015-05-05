@@ -19,6 +19,7 @@ main() {
 		export REDO_DB_DIR="$REDO_META_DIR/db"
 		mkdir -p "$REDO_DB_DIR"
 		export REDO_PATH="$REDO_BIN_DIR:$PATH"
+		export REDO_TIMESTAMP=`date +%s`
 		register_cmds ifchange ifcreate always graph run log targets sources gc
 	fi
 
@@ -47,13 +48,51 @@ redo() {
 			;;
 		*)
 			export REDO_TIMESTAMP=`date +%s`
+			local targets=
 			if [ "$#" -eq 0 ]; then
-				redo_ifchange all
+				_redo all
 			else
-				redo_ifchange $*
+				_redo $*
 			fi
 			;;
 	esac
+}
+
+_redo() {
+	local i
+	for i in "$@"
+	do
+		db_get_type "$i"
+		local file_type="$db_result"
+
+		# Find and execute build script
+		rm -rf "$i"
+		rm -rf "$REDO_DB_DIR/$i/.redo/prereqs"
+		rm -rf "$REDO_DB_DIR/$i/.redo/ifcreate"
+		if find_build_script "$i"; then
+			# an "always" target doesn't care about prereq
+			if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" != "a" ]; then
+				with_parent "$i" redo_ifcreate $non_exist_build_scripts
+			fi
+			local script="$build_script"
+			if run_build_script "$i" "$script"; then
+				# redo-always targets are always outdated so there's no need
+				# to update it's prereqs' checksums
+				if [ "$file_type" != "a" ]; then
+					db_update_prereqs_checksums "$i"
+				fi
+				db_update_own_checksum "$i" || true
+				db_mark_as_uptodate "$i"
+				redo_log "Done with '$i'"
+			else
+				redo_log -$ERROR "'$script' failed"
+				exit 1
+			fi
+		else
+			redo_log -$ERROR "No build script for '$i'"
+			exit 1
+		fi
+	done
 }
 
 redo_ifchange() {
@@ -145,33 +184,7 @@ redo_ifchange() {
 			fi
 		fi
 
-		# Find and execute build script
-		rm -rf "$i"
-		rm -rf "$REDO_DB_DIR/$i/.redo/prereqs"
-		rm -rf "$REDO_DB_DIR/$i/.redo/ifcreate"
-		if find_build_script "$i"; then
-			# an "always" target doesn't care about prereq
-			if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" != "a" ]; then
-				with_parent "$i" redo_ifcreate $non_exist_build_scripts
-			fi
-			local script="$build_script"
-			if run_build_script "$i" "$script"; then
-				# redo-always targets are always outdated so there's no need
-				# to update it's prereqs' checksums
-				if [ "$file_type" != "a" ]; then
-					db_update_prereqs_checksums "$i"
-				fi
-				db_update_own_checksum "$i" || true
-				db_mark_as_uptodate "$i"
-				redo_log "Done with '$i'"
-			else
-				redo_log -$ERROR "'$script' failed"
-				exit 1
-			fi
-		else
-			redo_log -$ERROR "No build script for '$i'"
-			exit 1
-		fi
+		_redo "$i"
 	done
 }
 
