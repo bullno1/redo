@@ -246,7 +246,7 @@ redo_graph() {
 	local j
 
 	echo "digraph redo {"
-	local files=`cd $REDO_DB_DIR; find . -type f -path '*/.redo/type'`
+	local files=`find $REDO_DB_DIR -type f -path '*/.redo/type' -printf '%P\n'`
 	if [ ! -z "$files" ]; then
 		for i in $files
 		do
@@ -281,7 +281,8 @@ redo_graph() {
 			if [ ! -z "$prereqs" ]; then
 				for j in $prereqs
 				do
-					echo "	\"$filename\" -> \"$j\";"
+					relative_path_to "$PWD" "$j"
+					echo "	\"$filename\" -> \"$path_result\";"
 				done
 			fi
 
@@ -290,7 +291,8 @@ redo_graph() {
 			if [ ! -z "$ifcreate_prereqs" ]; then
 				for j in $ifcreate_prereqs
 				do
-					echo "	\"$filename\" -> \"$j\" [ arrowhead=box, color=red ];"
+					relative_path_to "$PWD" "$j"
+					echo "	\"$filename\" -> \"$path_result\" [ arrowhead=box, color=red ];"
 				done
 			fi
 		done
