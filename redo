@@ -462,7 +462,7 @@ db_get_prereqs() {
 	if [ ! -d "$key" ]; then
 		db_result=
 	else
-		db_result=`cd $key; find -type f -printf "$REDO_ROOT_DIR/%p\n"`
+		db_result=`find $key -type f -printf "$REDO_ROOT_DIR/%P\n"`
 	fi
 }
 
@@ -484,7 +484,7 @@ db_get_ifcreate_prereqs() {
 	if [ ! -d "$key" ]; then
 		db_result=
 	else
-		db_result=`cd $key; find -type f -printf '$REDO_ROOT_DIR/%p\n'`
+		db_result=`find $key -type f -printf '$REDO_ROOT_DIR/%P\n'`
 	fi
 }
 
