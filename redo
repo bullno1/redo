@@ -509,7 +509,8 @@ db_update_prereqs_checksums() {
 		do
 			db_select "$i"
 			local checksum=`cat "$db_bucket/checksum"`
-			db_write "$db_bucket/prereqs_checksums/$i" "$checksum"
+			db_select "$1"
+			db_write "$db_bucket/prereqs/${i#${REDO_ROOT_DIR}/}" "$checksum"
 		done
 	fi
 }
@@ -549,7 +550,7 @@ db_prereq_rebuilt() {
 	local new_hash=`cat "$db_bucket/checksum"`
 	local old_hash=
 	db_select "$1"
-	local key="$db_bucket/prereqs_checksums/${2#${REDO_ROOT_DIR}/}"
+	local key="$db_bucket/prereqs/${2#${REDO_ROOT_DIR}/}"
 	if [ -f "$key" ]; then
 		old_hash=`cat "$key"`
 	fi
