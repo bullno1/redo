@@ -2,7 +2,7 @@ redo-phony
 . $TEST_LIB
 
 assert_cmd() {
-	assert [ $(readlink -f $(which $1)) = $REDO ]
+	assert which $1
 }
 
 assert_cmd redo

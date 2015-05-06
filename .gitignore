@@ -1,1 +1,4 @@
 /.redo
+/coverage
+/.ruby
+/.bundle
