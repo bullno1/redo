@@ -383,7 +383,7 @@ gc() {
 
 enum_files() {
 	local i
-	local types=`find .redo -path '*/.redo/type'`
+	local types=`find $REDO_DB_DIR -path '*/.redo/type' -printf '%p\n'`
 	for i in $types
 	do
 		local full_key_path=`readlink -f $i`
