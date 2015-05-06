@@ -558,7 +558,8 @@ find_build_script() {
 			do_search_dir="n"
 		fi
 
-		local search_base="${target_name#*.}.do"
+		local search_base="${target_name}.do"
+		search_base="${search_base#*.}"
 		local do_search_name="y"
 		while [ "$do_search_name" = "y" ]
 		do
