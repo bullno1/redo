@@ -12,7 +12,9 @@ DEFAULT_LEVEL=$TRACE
 main() {
 	if [ -z "$REDO" ]; then
 		export REDO=`readlink -f $0`
-		export REDO_META_DIR=`readlink -f ./.redo`
+		export REDO_START_DIR="$PWD"
+		export REDO_ROOT_DIR="$PWD"
+		export REDO_META_DIR="$REDO_ROOT_DIR/.redo"
 		mkdir -p "$REDO_META_DIR"
 		export REDO_BIN_DIR="$REDO_META_DIR/bin"
 		mkdir -p "$REDO_BIN_DIR"
@@ -65,14 +67,21 @@ _redo() {
 	local i
 	for i in "$@"
 	do
+		# Log the command with a relative path
+		relative_path_to "$REDO_START_DIR" "$i"
+		i="$path_result"
 		cmd_log redo "$i"
+		# From now on, only use absolute path
+		straighten_path "$REDO_START_DIR/$i"
+		i="$path_result"
 		db_get_type "$i"
 		local file_type="$db_result"
 
 		# Find and execute build script
 		rm -rf "$i"
-		rm -rf "$REDO_DB_DIR/$i/.redo/prereqs"
-		rm -rf "$REDO_DB_DIR/$i/.redo/ifcreate"
+		db_select "$i"
+		rm -rf "$db_bucket/prereqs"
+		rm -rf "$db_bucket/ifcreate"
 		if find_build_script "$i"; then
 			# only regular target cares about prereq
 			if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" = "tr" ]; then
@@ -104,6 +113,8 @@ redo_ifchange() {
 	local j
 	for i in "$@"
 	do
+		to_absolute_path "$i"
+		i="$path_result"
 		db_add_prereq "$REDO_PARENT" "$i"
 
 		db_get_type "$i"
@@ -200,6 +211,8 @@ redo_ifcreate() {
 	local i
 	for i in "$@"
 	do
+		to_absolute_path "$i"
+		i="$path_result"
 		if [ ! -e "$i" ]; then
 			db_add_ifcreate_prereq "$REDO_PARENT" "$i"
 		else
@@ -214,7 +227,8 @@ redo_always() {
 		exit 1
 	fi
 
-	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "ta"
+	db_select "$REDO_PARENT"
+	db_write "$db_bucket/type" "ta"
 }
 
 redo_phony() {
@@ -223,7 +237,8 @@ redo_phony() {
 		exit 1
 	fi
 
-	db_write "$REDO_DB_DIR/$REDO_PARENT/.redo/type" "tp"
+	db_select "$REDO_PARENT"
+	db_write "$db_bucket/type" "tp"
 }
 
 redo_graph() {
@@ -404,17 +419,17 @@ with_parent() {
 }
 
 db_get_type() {
-	local key="$REDO_DB_DIR/$1/.redo/type"
+	db_select "$1"
+	local key="$db_bucket/type"
 	if [ -f "$key" ]; then
 		db_result=`cat "$key"`
 	else
 		if [ -e "$1" ]; then
+			db_result="s"
 			if find_build_script "$1"; then
-				db_result="tr"
 				info_log -$WARN "'$1' is new but it already has a build script: '$build_script'"
-				info_log -$WARN "Please run 'redo-clean' before bulding"
-			else
-				db_result="s"
+				info_log -$WARN "It will be treated as a source file."
+				info_log -$WARN "To make it a target, remove it and run redo-gc before building"
 			fi
 		else
 			db_result="tr"
@@ -424,7 +439,8 @@ db_get_type() {
 }
 
 db_has_type() {
-	local key="$REDO_DB_DIR/$1/.redo/type"
+	db_select "$1"
+	local key="$db_bucket/type"
 	[ -f "$key" ]
 }
 
@@ -433,17 +449,20 @@ db_add_prereq() {
 		return 0
 	fi
 
-	local key="$REDO_DB_DIR/$1/.redo/prereqs/$2"
-	db_affirm_key "$key"
-	rm -rf "$REDO_DB_DIR/$1/.redo/ifcreate/$2"
+	db_select "$1"
+	local ifchange="$db_bucket/prereqs/${2#${REDO_ROOT_DIR}/}"
+	local ifcreate="$db_bucket/ifcreate/${2#${REDO_ROOT_DIR}/}"
+	db_affirm_key "$ifchange"
+	rm -rf "$ifcreate"
 }
 
 db_get_prereqs() {
-	local key="$REDO_DB_DIR/$1/.redo/prereqs"
+	db_select "$1"
+	local key="$db_bucket/prereqs"
 	if [ ! -d "$key" ]; then
 		db_result=
 	else
-		db_result=`cd $key;find -type f`
+		db_result=`cd $key; find -type f -printf "$REDO_ROOT_DIR/%p\n"`
 	fi
 }
 
@@ -452,23 +471,27 @@ db_add_ifcreate_prereq() {
 		return 0
 	fi
 
-	local key="$REDO_DB_DIR/$1/.redo/ifcreate/$2"
-	db_affirm_key "$key"
-	rm -rf "$REDO_DB_DIR/$1/.redo/prereqs/$2"
+	db_select "$1"
+	local ifchange="$db_bucket/prereqs/${2#${REDO_ROOT_DIR}/}"
+	local ifcreate="$db_bucket/ifcreate/${2#${REDO_ROOT_DIR}/}"
+	db_affirm_key "$ifcreate"
+	rm -rf "$ifchange"
 }
 
 db_get_ifcreate_prereqs() {
-	local key="$REDO_DB_DIR/$1/.redo/ifcreate"
+	db_select "$1"
+	local key="$db_bucket/ifcreate"
 	if [ ! -d "$key" ]; then
 		db_result=
 	else
-		db_result=`cd $key;find -type f`
+		db_result=`cd $key; find -type f -printf '$REDO_ROOT_DIR/%p\n'`
 	fi
 }
 
 db_update_own_checksum() {
 	local checksum=`sha1sum "$1" 2> /dev/null | cut -d' ' -f1`
-	local key="$REDO_DB_DIR/$1/.redo/checksum"
+	db_select "$1"
+	local key="$db_bucket/checksum"
 	db_affirm_key "$key"
 	local old_checksum=`cat "$key"`
 	db_write "$key" "$checksum"
@@ -482,21 +505,24 @@ db_update_prereqs_checksums() {
 	if [ ! -z "$prereqs" ]; then
 		for i in $prereqs
 		do
-			local checksum=`cat "$REDO_DB_DIR/$i/.redo/checksum"`
-			db_write "$REDO_DB_DIR/$1/.redo/prereqs_checksums/$i" "$checksum"
+			db_select "$i"
+			local checksum=`cat "$db_bucket/checksum"`
+			db_write "$db_bucket/prereqs_checksums/$i" "$checksum"
 		done
 	fi
 }
 
 db_mark_as_uptodate() {
-	local key="$REDO_DB_DIR/$1/.redo/uptodate"
+	db_select "$1"
+	local key="$db_bucket/uptodate"
 	local key_dir=`dirname "$key"`
 	mkdir -p "$key_dir"
 	touch "$key"
 }
 
 db_is_uptodate() {
-	local key="$REDO_DB_DIR/$1/.redo/uptodate"
+	db_select "$1"
+	local key="$db_bucket/uptodate"
 	if [ -f "$key" ]; then
 		local timestamp=`stat -c %Y "$key"`
 		[ "$REDO_TIMESTAMP" -le "$timestamp" ]
@@ -506,7 +532,8 @@ db_is_uptodate() {
 }
 
 db_outdated() {
-	local key="$REDO_DB_DIR/$1/.redo/uptodate"
+	db_select "$1"
+	local key="$db_bucket/uptodate"
 	if [ -f "$key" ]; then
 		local timestamp=`stat -c %Y "$key"`
 		[ "$REDO_TIMESTAMP" -gt "$timestamp" ]
@@ -516,9 +543,11 @@ db_outdated() {
 }
 
 db_prereq_rebuilt() {
-	local new_hash=`cat "$REDO_DB_DIR/$2/.redo/checksum"`
+	db_select "$2"
+	local new_hash=`cat "$db_bucket/checksum"`
 	local old_hash=
-	local key="$REDO_DB_DIR/$1/.redo/prereqs_checksums/$2"
+	db_select "$1"
+	local key="$db_bucket/prereqs_checksums/${2#${REDO_ROOT_DIR}/}"
 	if [ -f "$key" ]; then
 		old_hash=`cat "$key"`
 	fi
@@ -540,6 +569,10 @@ db_affirm_key() {
 	fi
 }
 
+db_select() {
+	db_bucket="$REDO_DB_DIR/${1#${REDO_ROOT_DIR}/}/.redo"
+}
+
 find_build_script() {
 	non_exist_build_scripts=
 	build_script="${1}.do"
@@ -551,22 +584,12 @@ find_build_script() {
 
 	local target_name=`basename "$1"`
 	local search_dir=`dirname "$1"`
-	local do_search_dir="y"
-	while [ "$do_search_dir" = "y" ]
+	while :
 	do
-		if [ "$search_dir" = "." ]; then
-			do_search_dir="n"
-		fi
-
 		local search_base="${target_name}.do"
 		search_base="${search_base#*.}"
-		local do_search_name="y"
-		while [ "$do_search_name" = "y" ]
+		while :
 		do
-			if [ "$search_base" = "do" ]; then
-				do_search_name="n"
-			fi
-
 			local filename="${search_dir}/default.${search_base}"
 			if [ -f "$filename" ] && [ "$filename" != "$1" ]; then
 				build_script="$filename"
@@ -575,10 +598,20 @@ find_build_script() {
 				non_exist_build_scripts="${non_exist_build_scripts}${IFS}${filename}"
 			fi
 
-			search_base="${search_base#*.}"
+			local next_search_base="${search_base#*.}"
+			if [ "$next_search_base" = "$search_base" ]; then
+				break
+			else
+				search_base="$next_search_base"
+			fi
 		done
 
-		search_dir=`dirname "$search_dir"`
+		local next_search_dir=`dirname "$search_dir"`
+		if [ "$next_search_dir" = "$search_dir" ]; then
+			break
+		else
+			search_dir="$next_search_dir"
+		fi
 	done
 
 	build_script=
@@ -589,7 +622,8 @@ run_build_script() {
 	info_log -$DEBUG "'$1' <- '$2'"
 	db_add_prereq "$1" "$2"
 	db_update_own_checksum "$2"
-	local temp_file="$REDO_DB_DIR/$1/.redo/doing"
+	db_select "$1"
+	local temp_file="$db_bucket/doing"
 	local script_path=`readlink -f "$2"`
 	local target_basename=`basename "$1"`
 	$REDO --run \
@@ -655,6 +689,49 @@ cmd_log() {
 	if [ $INFO -le $REDO_LOG_LEVEL ]; then
 		echo "${REDO_LOG_INDENT}${cmd} ${*}" >&2
 	fi
+}
+
+relative_path_to() {
+	to_absolute_path $2
+	path_result="${path_result#${1}/}"
+}
+
+to_absolute_path() {
+	case $1 in
+		/*)
+			straighten_path $1
+			;;
+		*)
+			straighten_path "$PWD/$1"
+			;;
+	esac
+}
+
+straighten_path() {
+	local old_IFS="$IFS"
+	IFS='/'
+	local i
+	local constructed_path=
+	for i in $1
+	do
+		if [ -z "$i" ]; then
+			continue
+		fi
+
+		case $i in
+			.)
+				continue
+				;;
+			..)
+				constructed_path="${constructed_path%/*}"
+				;;
+			*)
+				constructed_path="$constructed_path/$i"
+				;;
+		esac
+	done
+	IFS="$old_IFS"
+	path_result="$constructed_path"
 }
 
 main $*
