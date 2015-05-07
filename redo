@@ -24,7 +24,8 @@ main() {
 		export REDO_TIMESTAMP=`date +%s`
 		ensure_symlink "$REDO_BIN_DIR/redo"
 		register_cmds \
-			ifchange ifcreate always phony graph log targets sources gc clean
+			ifchange ifcreate always phony graph log targets sources gc clean \
+			tmp
 	fi
 
 	local name=`basename $0`
@@ -98,7 +99,7 @@ _redo() {
 				db_mark_as_uptodate "$i"
 				info_log "Done with '$i'"
 			else
-				info_log -$ERROR "'$script' failed"
+				info_log -$ERROR "'${script#${REDO_START_DIR}/}' failed"
 				exit 1
 			fi
 		else
@@ -327,6 +328,17 @@ redo_run() {
 	fi
 	cd `dirname $REDO_SCRIPT`
 	sh $shell_flag $REDO_SCRIPT $*
+}
+
+redo_tmp() {
+	if [ -z "$REDO_PARENT" ]; then
+		info_log -$ERROR "redo-tmp can only be called inside a do script"
+		exit 1
+	fi
+
+	local tmp_dir="${REDO_META_DIR}/tmp/${REDO_PARENT#${REDO_ROOT_DIR}/}/${1}"
+	mkdir -p $tmp_dir
+	echo "$tmp_dir"
 }
 
 redo_gc() {

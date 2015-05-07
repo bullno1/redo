@@ -15,3 +15,4 @@ assert_cmd redo-targets
 assert_cmd redo-sources
 assert_cmd redo-clean
 assert_cmd redo-gc
+assert_cmd redo-tmp
