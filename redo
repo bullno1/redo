@@ -640,6 +640,7 @@ run_build_script() {
 	db_update_own_checksum "$2"
 	db_select "$1"
 	local temp_file="$db_bucket/doing"
+	rm -rf "$temp_file"
 	local script_path=`readlink -f "$2"`
 	local target_basename=`basename "$1"`
 	$REDO --run \
