@@ -79,11 +79,12 @@ _redo() {
 		local file_type="$db_result"
 
 		# Find and execute build script
-		rm -rf "$i"
-		db_select "$i"
-		rm -rf "$db_bucket/prereqs"
-		rm -rf "$db_bucket/ifcreate"
 		if find_build_script "$i"; then
+			rm -rf "$i"
+			db_select "$i"
+			rm -rf "$db_bucket/prereqs"
+			rm -rf "$db_bucket/ifcreate"
+			rm -rf "$db_bucket/checksum"
 			# only regular target cares about prereq
 			if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" = "tr" ]; then
 				with_parent "$i" redo_ifcreate $non_exist_build_scripts
