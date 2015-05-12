@@ -25,7 +25,7 @@ main() {
 		ensure_symlink "$REDO_BIN_DIR/redo"
 		register_cmds \
 			ifchange ifcreate always phony graph log targets sources gc clean \
-			tmp logger
+			tmp logwrap
 	fi
 
 	local name=`basename $0`
@@ -314,11 +314,17 @@ redo_log() {
 	esac
 }
 
-redo_logger() {
-	while read line
-	do
-		info_log -$INFO $line
-	done
+redo_logwrap() {
+	if set -o pipefail 2> /dev/null; then
+		$* 2>&1 | \
+		while read line
+		do
+			info_log -$INFO $line
+		done
+	else
+		info_log -$ERROR "Cannot logwrap in this shell"
+		exit 1
+	fi
 }
 
 redo_run() {
