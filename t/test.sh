@@ -2,10 +2,22 @@ assert() {
 	set +e
 	$*
 	local status=$?
+	set -e
 	if [ $status -ne 0 ]; then
 		redo-log "$* -> $status"
 	fi
 	return $status
+}
+
+assert_fail() {
+	set +e
+	$*
+	local status=$?
+	set -e
+	if [ $status -eq 0 ]; then
+		redo-log "$* -> $status"
+		return 1
+	fi
 }
 
 assert_equal() {
