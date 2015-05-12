@@ -158,7 +158,8 @@ redo_ifchange() {
 		fi
 
 		# An existing regular target file may not need to be rebuilt
-		if [ "$file_type" = "tr" ] && [ -e "$i" ]; then
+		db_select "$i"
+		if [ "$file_type" = "tr" ] && [ -e "$i" ] && [ -f "$db_bucket/checksum" ]; then
 			local must_build="n"
 
 			# Check if prereqs are up-to-date
