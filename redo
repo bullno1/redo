@@ -25,7 +25,7 @@ main() {
 		ensure_symlink "$REDO_BIN_DIR/redo"
 		register_cmds \
 			ifchange ifcreate always phony graph log targets sources gc clean \
-			tmp
+			tmp logger
 	fi
 
 	local name=`basename $0`
@@ -312,6 +312,13 @@ redo_log() {
 			info_log -$INFO $*
 		;;
 	esac
+}
+
+redo_logger() {
+	while read line
+	do
+		info_log -$INFO $line
+	done
 }
 
 redo_run() {
