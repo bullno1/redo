@@ -348,7 +348,7 @@ cli_redo_run() {
 	export PATH="$REDO_PATH"
 	export REDO_LOG_INDENT="$REDO_LOG_INDENT  "
 	local shell_flag=
-	if [ "$DEBUG" -le "$REDO_LOG_LEVEL" ]; then
+	if [ "$TRACE" -le "$REDO_LOG_LEVEL" ]; then
 		export PS4="${REDO_LOG_INDENT}: > "
 		shell_flag=-ex
 	else
