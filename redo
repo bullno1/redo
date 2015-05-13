@@ -45,15 +45,17 @@ main() {
 }
 
 cli_redo() {
+	#REDO_PARAMS=
 	case $1 in
+		--*=*)
+			parse_params_and_exec _cli_redo $*
+			;;
 		--*)
 			local cmd=${1#--}
 			shift
 			try_dispatch_cmd "$cmd" $*
 			;;
 		*)
-			export REDO_TIMESTAMP=`date +%s`
-			REDO_PARENT=
 			if [ "$#" -eq 0 ]; then
 				_cli_redo all
 			else
@@ -64,6 +66,9 @@ cli_redo() {
 }
 
 _cli_redo() {
+	export REDO_TIMESTAMP=`date +%s`
+	REDO_PARENT=
+
 	local i
 	for i in "$@"
 	do
@@ -112,6 +117,10 @@ redo() {
 }
 
 cli_redo_ifchange() {
+	parse_params_and_exec _cli_redo_ifchange $*
+}
+
+_cli_redo_ifchange() {
 	local i
 	for i in "$@"
 	do
@@ -355,6 +364,10 @@ cli_redo_run() {
 		shell_flag=-e
 	fi
 	cd `dirname $REDO_SCRIPT`
+	for param in $REDO_PARAMS
+	do
+		export $param
+	done
 	sh $shell_flag $REDO_SCRIPT $*
 }
 
@@ -689,6 +702,40 @@ run_build_script() {
 	else
 		return $status
 	fi
+}
+
+parse_params_and_exec() {
+	local cmd="$1"
+	shift
+	# Unset old params
+	local param
+	for param in $REDO_PARAMS
+	do
+		unset ${param%=*}
+	done
+
+	REDO_PARAMS=
+	local arg
+	local first="y"
+	for arg in $@
+	do
+		case $arg in
+			--*=*)
+				if [ "$first" = "y" ]; then
+					first="n"
+					REDO_PARAMS="${arg#--}"
+				else
+					REDO_PARAMS="${REDO_PARAMS}${IFS}${arg#--}"
+				fi
+				shift
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+	export REDO_PARAMS
+	$cmd $*
 }
 
 register_cmds() {
