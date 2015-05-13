@@ -6,3 +6,5 @@ redo-ifchange --a=b --b=c b
 assert_equal '"c"' '`cat b`'
 redo-ifchange --a=b --b=c "no-inherit"
 assert_equal '""' '`cat child`'
+redo --c=d --e=f
+assert_equal '"df"' '`cat all`'

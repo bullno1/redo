@@ -45,7 +45,6 @@ main() {
 }
 
 cli_redo() {
-	#REDO_PARAMS=
 	case $1 in
 		--*=*)
 			parse_params_and_exec _cli_redo $*
@@ -56,11 +55,7 @@ cli_redo() {
 			try_dispatch_cmd "$cmd" $*
 			;;
 		*)
-			if [ "$#" -eq 0 ]; then
-				_cli_redo all
-			else
-				_cli_redo $*
-			fi
+			_cli_redo $*
 			;;
 	esac
 }
@@ -69,12 +64,17 @@ _cli_redo() {
 	export REDO_TIMESTAMP=`date +%s`
 	REDO_PARENT=
 
-	local i
-	for i in "$@"
-	do
-		to_absolute_path "$i"
+	if [ "$#" -eq 0 ]; then
+		to_absolute_path "all"
 		redo "$path_result"
-	done
+	else
+		local i
+		for i in "$@"
+		do
+			to_absolute_path "$i"
+			redo "$path_result"
+		done
+	fi
 }
 
 redo() {
