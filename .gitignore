@@ -1,5 +1,6 @@
 /.redo
 /coverage
+/bashcov
 /.ruby
 /.bundle
 /graph.png
