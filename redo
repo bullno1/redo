@@ -32,7 +32,7 @@ main() {
 
 	case $name in
 		redo)
-			redo $*
+			cli_redo $*
 			;;
 		redo-*)
 			try_dispatch_cmd "${name#redo-}" $*
@@ -44,7 +44,7 @@ main() {
 	esac
 }
 
-redo() {
+cli_redo() {
 	case $1 in
 		--*)
 			local cmd=${1#--}
@@ -54,177 +54,190 @@ redo() {
 		*)
 			export REDO_TIMESTAMP=`date +%s`
 			REDO_PARENT=
-			local targets=
 			if [ "$#" -eq 0 ]; then
-				_redo all
+				_cli_redo all
 			else
-				_redo $*
+				_cli_redo $*
 			fi
 			;;
 	esac
 }
 
-_redo() {
+_cli_redo() {
 	local i
 	for i in "$@"
 	do
-		# Log the command with a relative path
-		relative_path_to "$REDO_START_DIR" "$i"
-		i="$path_result"
-		cmd_log redo "$i"
-		# From now on, only use absolute path
-		straighten_path "$REDO_START_DIR/$i"
-		i="$path_result"
-		db_get_type "$i"
-		local file_type="$db_result"
+		to_absolute_path "$i"
+		redo "$path_result"
+	done
+}
 
-		# Find and execute build script
-		if find_build_script "$i"; then
-			rm -rf "$i"
-			db_select "$i"
-			rm -rf "$db_bucket/prereqs"
-			rm -rf "$db_bucket/ifcreate"
-			rm -rf "$db_bucket/checksum"
-			# only regular target cares about prereq
-			if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" = "tr" ]; then
-				with_parent "$i" redo_ifcreate $non_exist_build_scripts
+redo() {
+	relative_path_to "$REDO_START_DIR" "$1"
+	local rel_path="$path_result"
+	cmd_log redo "$rel_path"
+
+	db_get_type "$1"
+	local file_type="$db_result"
+
+	# Find and execute build script
+	if find_build_script "$1"; then
+		rm -rf "$1"
+		db_select "$1"
+		rm -rf "$db_bucket/prereqs"
+		rm -rf "$db_bucket/ifcreate"
+		rm -rf "$db_bucket/checksum"
+		# only regular target cares about prereq
+		if [ ! -z "$non_exist_build_scripts" ] && [ "$file_type" = "tr" ]; then
+			with_parent "$1" redo_ifcreate $non_exist_build_scripts
+		fi
+		local script="$build_script"
+		if run_build_script "$1" "$script"; then
+			# an always or phony target is always outdated so there's no need
+			# to update its prereqs' checksums
+			if [ "$file_type" = "tr" ]; then
+				db_update_prereqs_checksums "$1"
 			fi
-			local script="$build_script"
-			if run_build_script "$i" "$script"; then
-				# an always or phony target is always outdated so there's no need
-				# to update its prereqs' checksums
-				if [ "$file_type" = "tr" ]; then
-					db_update_prereqs_checksums "$i"
-				fi
-				db_update_own_checksum "$i" || true
-				db_mark_as_uptodate "$i"
-				info_log "Done with '$i'"
-			else
-				info_log -$ERROR "'${script#${REDO_START_DIR}/}' failed"
-				exit 1
-			fi
+			db_update_own_checksum "$1" || true
+			db_mark_as_uptodate "$1"
+			info_log "Done with '$rel_path'"
 		else
-			info_log -$ERROR "No build script for '$i'"
+			info_log -$ERROR "'${script#${REDO_START_DIR}/}' failed"
 			exit 1
 		fi
+	else
+		info_log -$ERROR "No build script for '$rel_path'"
+		exit 1
+	fi
+}
+
+cli_redo_ifchange() {
+	local i
+	for i in "$@"
+	do
+		to_absolute_path "$i"
+		redo_ifchange "$path_result"
 	done
 }
 
 redo_ifchange() {
+	relative_path_to "$REDO_START_DIR" "$1"
+	local rel_path="$path_result"
+	db_add_prereq "$REDO_PARENT" "$1"
+
+	db_get_type "$1"
+	local file_type="$db_result"
+
+	local file_type_name=
+	case $file_type in
+		s)
+			file_type_name="source file"
+			;;
+		tr)
+			file_type_name="regular target"
+			;;
+		ta)
+			file_type_name="live target"
+			;;
+		tp)
+			file_type_name="phony target"
+			;;
+	esac
+
+	info_log "Checking $file_type_name '$rel_path'"
+
+	if db_is_uptodate "$1"; then
+		info_log "'$rel_path' was checked previously"
+		return 0
+	fi
+
+	# A source file only need to have its hash updated
+	if [ "$file_type" = "s" ]; then
+		if db_update_own_checksum "$1"; then
+			info_log "'$rel_path' was updated"
+		else
+			info_log "'$rel_path' is unchanged"
+		fi
+		db_mark_as_uptodate "$1"
+
+		return 0
+	fi
+
+	# An existing regular target file may not need to be rebuilt
+	db_select "$1"
+	if [ "$file_type" = "tr" ] && [ -e "$1" ] && [ -f "$db_bucket/checksum" ]; then
+		local i
+		local must_build="n"
+
+		# Check if prereqs are up-to-date
+		db_get_prereqs "$1"
+		local prereqs="$db_result"
+		if [ ! -z "$prereqs" ]; then
+			for i in $prereqs
+			do
+				relative_path_to "$REDO_START_DIR" "$i"
+				local prereq_rel_path="$path_result"
+				info_log "Checking prereq '$prereq_rel_path' of '$rel_path'"
+
+				# Update prereq if needed
+				if db_outdated "$i"; then
+					with_parent "$1" redo_ifchange "$i"
+				fi
+
+				# Even if prereq is up-to-date, we may still depend on an old
+				# version of it, so check if it was rebuilt since last time
+				if db_prereq_rebuilt "$1" "$i"; then
+					info_log "'$prereq_rel_path' was updated"
+					must_build="y"
+				fi
+			done
+		fi
+
+		# Check all "if-create" prereqs
+		db_get_ifcreate_prereqs "$1"
+		local ifcreate_prereqs="$db_result"
+		if [ ! -z "$ifcreate_prereqs" ]; then
+			for i in $ifcreate_prereqs
+			do
+				if [ -e "$i" ]; then
+					relative_path_to "$REDO_START_DIR" "$i"
+					info_log "'$path_result' was created"
+					must_build="y"
+					break
+				fi
+			done
+		fi
+
+		# If file exists and it is not required to build, bail out
+		if [ "$must_build" = "n" ]; then
+			db_mark_as_uptodate "$1"
+			info_log "'$rel_path' is up-to-date"
+			return 0
+		fi
+	fi
+
+	redo "$1"
+}
+
+cli_redo_ifcreate() {
 	local i
-	local j
 	for i in "$@"
 	do
 		to_absolute_path "$i"
-		i="$path_result"
-		db_add_prereq "$REDO_PARENT" "$i"
-
-		db_get_type "$i"
-		local file_type="$db_result"
-
-		local file_type_name=
-		case $file_type in
-			s)
-				file_type_name="source file"
-				;;
-			tr)
-				file_type_name="regular target"
-				;;
-			ta)
-				file_type_name="live target"
-				;;
-			tp)
-				file_type_name="phony target"
-				;;
-		esac
-
-		info_log "Checking $file_type_name '$i'"
-
-		if db_is_uptodate "$i"; then
-			info_log "'$i' was checked previously"
-			continue
-		fi
-
-		# A source file only need to have its hash updated
-		if [ "$file_type" = "s" ]; then
-			if db_update_own_checksum "$i"; then
-				info_log "'$i' was updated"
-			else
-				info_log "'$i' is unchanged"
-			fi
-			db_mark_as_uptodate "$i"
-
-			continue
-		fi
-
-		# An existing regular target file may not need to be rebuilt
-		db_select "$i"
-		if [ "$file_type" = "tr" ] && [ -e "$i" ] && [ -f "$db_bucket/checksum" ]; then
-			local must_build="n"
-
-			# Check if prereqs are up-to-date
-			db_get_prereqs "$i"
-			local prereqs="$db_result"
-			if [ ! -z "$prereqs" ]; then
-				for j in $prereqs
-				do
-					info_log "Checking prereq '$j' of '$i'"
-
-					# Update prereq if needed
-					if db_outdated "$j"; then
-						with_parent "$i" redo_ifchange "$j"
-					fi
-
-					# Even if prereq is up-to-date, we may still depend on an old
-					# version of it, so check if it was rebuilt since last time
-					if db_prereq_rebuilt "$i" "$j"; then
-						info_log "'$j' was updated"
-						must_build="y"
-					fi
-				done
-			fi
-
-			# Check all "if-create" prereqs
-			db_get_ifcreate_prereqs "$i"
-			local ifcreate_prereqs="$db_result"
-			if [ ! -z "$ifcreate_prereqs" ]; then
-				for j in $ifcreate_prereqs
-				do
-					if [ -e "$j" ]; then
-						info_log "'$j' was created"
-						must_build="y"
-						break
-					fi
-				done
-			fi
-
-			# If file exists and it is not required to build, bail out
-			if [ "$must_build" = "n" ]; then
-				db_mark_as_uptodate "$i"
-				info_log "'$i' is up-to-date"
-				continue
-			fi
-		fi
-
-		_redo "$i"
+		redo_ifcreate "$path_result"
 	done
 }
 
 redo_ifcreate() {
-	local i
-	for i in "$@"
-	do
-		to_absolute_path "$i"
-		i="$path_result"
-		if [ ! -e "$i" ]; then
-			db_add_ifcreate_prereq "$REDO_PARENT" "$i"
-		else
-			info_log -$ERROR "'$i' exists"
-		fi
-	done
+	if [ ! -e "$1" ]; then
+		db_add_ifcreate_prereq "$REDO_PARENT" "$1"
+	else
+		relative_path_to "$REDO_START_DIR" "$1"
+		info_log -$ERROR "'$path_result' exists"
+	fi
 }
 
-redo_always() {
+cli_redo_always() {
 	if [ -z "$REDO_PARENT" ]; then
 		info_log -$ERROR "redo-always can only be called inside a do script"
 		exit 1
@@ -234,7 +247,7 @@ redo_always() {
 	db_write "$db_bucket/type" "ta"
 }
 
-redo_phony() {
+cli_redo_phony() {
 	if [ -z "$REDO_PARENT" ]; then
 		info_log -$ERROR "redo-phony can only be called inside a do script"
 		exit 1
@@ -244,7 +257,7 @@ redo_phony() {
 	db_write "$db_bucket/type" "tp"
 }
 
-redo_graph() {
+cli_redo_graph() {
 	local i
 	local j
 
@@ -303,7 +316,7 @@ redo_graph() {
 	echo "}"
 }
 
-redo_log() {
+cli_redo_log() {
 	case $1 in
 		-*)
 			info_log $*
@@ -314,7 +327,7 @@ redo_log() {
 	esac
 }
 
-redo_logwrap() {
+cli_redo_logwrap() {
 	if set -o pipefail 2> /dev/null; then
 		$* 2>&1 | \
 		while read line
@@ -327,7 +340,7 @@ redo_logwrap() {
 	fi
 }
 
-redo_run() {
+cli_redo_run() {
 	REDO_SCRIPT=$1
 	shift
 	REDO_PARENT=$1
@@ -345,7 +358,7 @@ redo_run() {
 	sh $shell_flag $REDO_SCRIPT $*
 }
 
-redo_tmp() {
+cli_redo_tmp() {
 	if [ -z "$REDO_PARENT" ]; then
 		info_log -$ERROR "redo-tmp can only be called inside a do script"
 		exit 1
@@ -356,19 +369,19 @@ redo_tmp() {
 	echo "$tmp_dir"
 }
 
-redo_gc() {
+cli_redo_gc() {
 	enum_files gc
 }
 
-redo_clean() {
+cli_redo_clean() {
 	rm -rf `$REDO --targets`
 }
 
-redo_targets() {
+cli_redo_targets() {
 	enum_files print_target
 }
 
-redo_sources() {
+cli_redo_sources() {
 	enum_files print_source
 }
 
@@ -424,7 +437,7 @@ enum_files() {
 	done
 }
 
-redo_activate() {
+cli_redo_activate() {
 	local old_path="$PATH"
 	local new_path="$REDO_PATH"
 	activate_script=`cat << SCRIPT
@@ -649,7 +662,11 @@ find_build_script() {
 }
 
 run_build_script() {
-	info_log -$DEBUG "'$1' <- '$2'"
+	relative_path_to "$REDO_START_DIR" "$1"
+	local target_rel_path="$path_result"
+	relative_path_to "$REDO_START_DIR" "$2"
+	local script_rel_path="$path_result"
+	info_log -$DEBUG "'$target_rel_path' <- '$script_rel_path'"
 	db_add_prereq "$1" "$2"
 	db_update_own_checksum "$2"
 	db_select "$1"
@@ -691,7 +708,7 @@ ensure_symlink() {
 
 try_dispatch_cmd() {
 	local cmd_name="$1"
-	local func_name="redo_${cmd_name}"
+	local func_name="cli_redo_${cmd_name}"
 	shift
 	if type $func_name 1> /dev/null 2> /dev/null ; then
 		$func_name $*
