@@ -180,42 +180,36 @@ redo_ifchange() {
 
 		# Check if prereqs are up-to-date
 		db_get_prereqs "$1"
-		local prereqs="$db_result"
-		if [ ! -z "$prereqs" ]; then
-			for i in $prereqs
-			do
-				relative_path_to "$REDO_START_DIR" "$i"
-				local prereq_rel_path="$path_result"
-				info_log "Checking prereq '$prereq_rel_path' of '$rel_path'"
+		for i in $db_result
+		do
+			relative_path_to "$REDO_START_DIR" "$i"
+			local prereq_rel_path="$path_result"
+			info_log "Checking prereq '$prereq_rel_path' of '$rel_path'"
 
-				# Update prereq if needed
-				if db_outdated "$i"; then
-					with_parent "$1" redo_ifchange "$i"
-				fi
+			# Update prereq if needed
+			if db_outdated "$i"; then
+				with_parent "$1" redo_ifchange "$i"
+			fi
 
-				# Even if prereq is up-to-date, we may still depend on an old
-				# version of it, so check if it was rebuilt since last time
-				if db_prereq_rebuilt "$1" "$i"; then
-					info_log "'$prereq_rel_path' was updated"
-					must_build="y"
-				fi
-			done
-		fi
+			# Even if prereq is up-to-date, we may still depend on an old
+			# version of it, so check if it was rebuilt since last time
+			if db_prereq_rebuilt "$1" "$i"; then
+				info_log "'$prereq_rel_path' was updated"
+				must_build="y"
+			fi
+		done
 
 		# Check all "if-create" prereqs
 		db_get_ifcreate_prereqs "$1"
-		local ifcreate_prereqs="$db_result"
-		if [ ! -z "$ifcreate_prereqs" ]; then
-			for i in $ifcreate_prereqs
-			do
-				if [ -e "$i" ]; then
-					relative_path_to "$REDO_START_DIR" "$i"
-					info_log "'$path_result' was created"
-					must_build="y"
-					break
-				fi
-			done
-		fi
+		for i in $db_result
+		do
+			if [ -e "$i" ]; then
+				relative_path_to "$REDO_START_DIR" "$i"
+				info_log "'$path_result' was created"
+				must_build="y"
+				break
+			fi
+		done
 
 		# If file exists and it is not required to build, bail out
 		if [ "$must_build" = "n" ]; then
@@ -272,56 +266,48 @@ cli_redo_graph() {
 
 	echo "digraph redo {"
 	local files=`find $REDO_DB_DIR -type f -path '*/.redo/type' -printf '%P\n'`
-	if [ ! -z "$files" ]; then
-		for i in $files
+	for i in $files
+	do
+		local filename="${i%/.redo/type}"
+		local file_type=
+		if db_has_type "$filename"; then
+			db_get_type "$filename"
+			file_type="$db_result"
+		fi
+		local attrs=
+		case $file_type in
+			s)
+				attrs="[ shape=box ]"
+				;;
+			tr)
+				attrs="[ shape=ellipse ]"
+				;;
+			ta)
+				attrs="[ shape=diamond ]"
+				;;
+			tp)
+				attrs="[ shape=diamond, color=green ]"
+				;;
+			*)
+				attrs="[ ]"
+				;;
+		esac
+		echo "	\"$filename\" $attrs"
+
+		db_get_prereqs "$filename"
+		for j in $db_result
 		do
-			local filename="${i%/.redo/type}"
-			local file_type=
-			if db_has_type "$filename"; then
-				db_get_type "$filename"
-				file_type="$db_result"
-			fi
-			local attrs=
-			case $file_type in
-				s)
-					attrs="[ shape=box ]"
-					;;
-				tr)
-					attrs="[ shape=ellipse ]"
-					;;
-				ta)
-					attrs="[ shape=diamond ]"
-					;;
-				tp)
-					attrs="[ shape=diamond, color=green ]"
-					;;
-				*)
-					attrs="[ ]"
-					;;
-			esac
-			echo "	\"$filename\" $attrs"
-
-			db_get_prereqs "$filename"
-			local prereqs="$db_result"
-			if [ ! -z "$prereqs" ]; then
-				for j in $prereqs
-				do
-					relative_path_to "$PWD" "$j"
-					echo "	\"$filename\" -> \"$path_result\";"
-				done
-			fi
-
-			db_get_ifcreate_prereqs "$filename"
-			local ifcreate_prereqs="$db_result"
-			if [ ! -z "$ifcreate_prereqs" ]; then
-				for j in $ifcreate_prereqs
-				do
-					relative_path_to "$PWD" "$j"
-					echo "	\"$filename\" -> \"$path_result\" [ arrowhead=box, color=red ];"
-				done
-			fi
+			relative_path_to "$PWD" "$j"
+			echo "	\"$filename\" -> \"$path_result\";"
 		done
-	fi
+
+		db_get_ifcreate_prereqs "$filename"
+		for j in $db_result
+		do
+			relative_path_to "$PWD" "$j"
+			echo "	\"$filename\" -> \"$path_result\" [ arrowhead=box, color=red ];"
+		done
+	done
 	echo "}"
 }
 
@@ -556,16 +542,13 @@ db_update_own_checksum() {
 db_update_prereqs_checksums() {
 	local i
 	db_get_prereqs "$1"
-	local prereqs="$db_result"
-	if [ ! -z "$prereqs" ]; then
-		for i in $prereqs
-		do
-			db_select "$i"
-			local checksum=`cat "$db_bucket/checksum"`
-			db_select "$1"
-			db_write "$db_bucket/prereqs/${i#${REDO_ROOT_DIR}/}" "$checksum"
-		done
-	fi
+	for i in $db_result
+	do
+		db_select "$i"
+		local checksum=`cat "$db_bucket/checksum"`
+		db_select "$1"
+		db_write "$db_bucket/prereqs/${i#${REDO_ROOT_DIR}/}" "$checksum"
+	done
 }
 
 db_mark_as_uptodate() {
