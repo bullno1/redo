@@ -178,27 +178,6 @@ redo_ifchange() {
 		local i
 		local must_build="n"
 
-		# Check if prereqs are up-to-date
-		db_get_prereqs "$1"
-		for i in $db_result
-		do
-			relative_path_to "$REDO_START_DIR" "$i"
-			local prereq_rel_path="$path_result"
-			info_log "Checking prereq '$prereq_rel_path' of '$rel_path'"
-
-			# Update prereq if needed
-			if db_outdated "$i"; then
-				with_parent "$1" redo_ifchange "$i"
-			fi
-
-			# Even if prereq is up-to-date, we may still depend on an old
-			# version of it, so check if it was rebuilt since last time
-			if db_prereq_rebuilt "$1" "$i"; then
-				info_log "'$prereq_rel_path' was updated"
-				must_build="y"
-			fi
-		done
-
 		# Check all "if-create" prereqs
 		db_get_ifcreate_prereqs "$1"
 		for i in $db_result
@@ -210,6 +189,29 @@ redo_ifchange() {
 				break
 			fi
 		done
+
+		if [ "$must_build" = "n" ]; then
+			# Check if pre reqs are up-to-date
+			db_get_prereqs "$1"
+			for i in $db_result
+			do
+				relative_path_to "$REDO_START_DIR" "$i"
+				local prereq_rel_path="$path_result"
+				info_log "Checking prereq '$prereq_rel_path' of '$rel_path'"
+
+				# Update prereq if needed
+				if db_outdated "$i"; then
+					with_parent "$1" redo_ifchange "$i"
+				fi
+
+				# Even if prereq is up-to-date, we may still depend on an old
+				# version of it, so check if it was rebuilt since last time
+				if db_prereq_rebuilt "$1" "$i"; then
+					info_log "'$prereq_rel_path' was updated"
+					must_build="y"
+				fi
+			done
+		fi
 
 		# If file exists and it is not required to build, bail out
 		if [ "$must_build" = "n" ]; then
